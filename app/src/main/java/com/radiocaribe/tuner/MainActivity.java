@@ -22,6 +22,9 @@ import android.os.BatteryManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Build;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -127,6 +130,20 @@ public class MainActivity extends Activity {
 
     private final boolean[] controlDown = new boolean[] {false, false, false};
     private boolean adminGestureLatched = false;
+    private boolean suppressCarouselSelection = true;
+
+    private final Runnable carouselSnapRunnable = new Runnable() {
+        @Override public void run() {
+            if (suppressCarouselSelection || gridScroll == null || gridRow == null) return;
+            int nearest = findNearestStationIndex();
+            if (nearest < 0) return;
+            if (nearest != stationIndex) {
+                selectStation(nearest, true);
+            } else {
+                scrollToSelected(true);
+            }
+        }
+    };
 
     private final Runnable clockTicker = new Runnable() {
         @Override public void run() {
@@ -310,104 +327,76 @@ public class MainActivity extends Activity {
     }
 
     private void buildMainLogo() {
-        mainLogoBox = new FrameLayout(this);
-
-        mainLogoView = new ImageView(this);
-        mainLogoView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        mainLogoBox.addView(mainLogoView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        mainFallbackView = new StationBadgeView(this);
-        mainFallbackView.setVisibility(View.GONE);
-        mainLogoBox.addView(mainFallbackView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        FrameLayout.LayoutParams logoLp = new FrameLayout.LayoutParams(dp(292), dp(292), Gravity.TOP | Gravity.LEFT);
-        logoLp.leftMargin = dp(8);
-        logoLp.topMargin = dp(52);
-        root.addView(mainLogoBox, logoLp);
+        // v0.6: el logo principal ahora forma parte del carrusel central.
     }
 
     private void buildRightPanel() {
         FrameLayout panel = new FrameLayout(this);
         FrameLayout.LayoutParams panelLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        panelLp.leftMargin = dp(308);
-        panelLp.rightMargin = dp(8);
+        panelLp.leftMargin = 0;
+        panelLp.rightMargin = 0;
         panelLp.topMargin = dp(48);
-        panelLp.bottomMargin = dp(4);
+        panelLp.bottomMargin = 0;
         root.addView(panel, panelLp);
 
         gridScroll = new HorizontalScrollView(this);
         gridScroll.setHorizontalScrollBarEnabled(false);
+        gridScroll.setVerticalScrollBarEnabled(false);
         gridScroll.setFillViewport(false);
         gridScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        gridScroll.setSmoothScrollingEnabled(true);
+        gridScroll.setClipToPadding(false);
 
         gridRow = new LinearLayout(this);
         gridRow.setOrientation(LinearLayout.HORIZONTAL);
         gridRow.setGravity(Gravity.CENTER_VERTICAL);
+        gridRow.setPadding(dp(205), 0, dp(205), 0);
         gridScroll.addView(gridRow, new HorizontalScrollView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        gridScroll.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
+            if (suppressCarouselSelection) return;
+            handler.removeCallbacks(carouselSnapRunnable);
+            handler.postDelayed(carouselSnapRunnable, 135L);
+        });
+
         FrameLayout.LayoutParams gridLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(66), Gravity.TOP);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(238), Gravity.TOP);
+        gridLp.topMargin = dp(2);
         panel.addView(gridScroll, gridLp);
 
-        stationNameView = makeText("", 21, Typeface.BOLD);
+        stationNameView = makeText("", 22, Typeface.BOLD);
         stationNameView.setSingleLine(true);
-        stationNameView.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
+        stationNameView.setGravity(Gravity.CENTER);
         FrameLayout.LayoutParams nameLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(38), Gravity.TOP);
-        nameLp.topMargin = dp(74);
+        nameLp.leftMargin = dp(16);
+        nameLp.rightMargin = dp(16);
+        nameLp.topMargin = dp(238);
         panel.addView(stationNameView, nameLp);
 
         LinearLayout meta = new LinearLayout(this);
         meta.setOrientation(LinearLayout.HORIZONTAL);
-        meta.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        meta.setGravity(Gravity.CENTER);
 
         sourceView = makeText("ONLINE", 13, Typeface.BOLD);
         sourceView.setGravity(Gravity.CENTER);
-        sourceView.setPadding(dp(12), 0, dp(12), 0);
+        sourceView.setPadding(dp(13), 0, dp(13), 0);
         meta.addView(sourceView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)));
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
 
-        frequencyView = makeText("", 14, Typeface.BOLD);
-        frequencyView.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
+        frequencyView = makeText("", 15, Typeface.NORMAL);
+        frequencyView.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams freqLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(28));
-        freqLp.leftMargin = dp(10);
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(30));
+        freqLp.leftMargin = dp(8);
         meta.addView(frequencyView, freqLp);
 
         FrameLayout.LayoutParams metaLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(30), Gravity.TOP);
-        metaLp.topMargin = dp(116);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(34), Gravity.BOTTOM);
+        metaLp.bottomMargin = dp(2);
         panel.addView(meta, metaLp);
-
-        LinearLayout controls = new LinearLayout(this);
-        controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setGravity(Gravity.CENTER);
-
-        previousButton = new ColorButton(this, "◀", false);
-        playButton = new ColorButton(this, "▶", true);
-        nextButton = new ColorButton(this, "▶", false);
-
-        LinearLayout.LayoutParams sideLp = new LinearLayout.LayoutParams(dp(76), dp(76));
-        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(dp(92), dp(92));
-        playLp.leftMargin = dp(20);
-        playLp.rightMargin = dp(20);
-
-        controls.addView(previousButton, sideLp);
-        controls.addView(playButton, playLp);
-        controls.addView(nextButton, sideLp);
-
-        FrameLayout.LayoutParams controlsLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(96), Gravity.BOTTOM);
-        controlsLp.bottomMargin = dp(0);
-        panel.addView(controls, controlsLp);
-
-        previousButton.setOnTouchListener(new ControlTouchListener(0, () -> changeStation(-1)));
-        playButton.setOnTouchListener(new ControlTouchListener(1, this::togglePlayback));
-        nextButton.setOnTouchListener(new ControlTouchListener(2, () -> changeStation(1)));
     }
 
     private void buildDiagnostics() {
@@ -445,22 +434,7 @@ public class MainActivity extends Activity {
         int logoRes = logoResFor(s);
         stationAccent = logoRes != 0 ? extractAccentColor(logoRes) : NAVY;
 
-        if (logoRes != 0) {
-            mainLogoView.setImageResource(logoRes);
-            mainLogoView.setVisibility(View.VISIBLE);
-            mainFallbackView.setVisibility(View.GONE);
-        } else {
-            mainLogoView.setImageDrawable(null);
-            mainLogoView.setVisibility(View.GONE);
-            mainFallbackView.setStation(s.shortName);
-            mainFallbackView.setAccent(NAVY);
-            mainFallbackView.setVisibility(View.VISIBLE);
-        }
-
         updateSourcePill();
-        applyControlColors();
-        updatePlayButton(player != null && player.isPlaying());
-
         prefs.edit().putInt(KEY_INDEX, stationIndex).apply();
         if (wifiView != null) wifiView.invalidate();
     }
@@ -547,61 +521,142 @@ public class MainActivity extends Activity {
     }
 
     private void rebuildGrid() {
-        if (gridRow == null) return;
+        if (gridRow == null || gridScroll == null) return;
+
+        suppressCarouselSelection = true;
+        handler.removeCallbacks(carouselSnapRunnable);
         gridRow.removeAllViews();
 
-        List<Integer> ordered = orderedStationIndices();
-        for (int idx : ordered) {
-            final int sourceIndex = idx;
-            Station s = stations.get(sourceIndex);
+        for (int i = 0; i < stations.size(); i++) {
+            final int sourceIndex = i;
+            final Station s = stations.get(sourceIndex);
+            final boolean selected = sourceIndex == stationIndex;
+            final int tileSize = selected ? 222 : 118;
 
             FrameLayout tile = new FrameLayout(this);
-            GradientDrawable tileBg = new GradientDrawable();
-            tileBg.setColor(darkMode ? Color.rgb(13, 24, 39) : Color.WHITE);
-            tileBg.setCornerRadius(dp(4));
+            tile.setTag(sourceIndex);
+            tile.setClickable(true);
+            tile.setFocusable(true);
+            tile.setPadding(0, 0, 0, 0);
 
             int logo = logoResFor(s);
-            int borderColor = sourceIndex == stationIndex
-                    ? (logo != 0 ? extractAccentColor(logo) : NAVY)
-                    : (darkMode ? Color.rgb(50, 61, 75) : Color.rgb(226, 230, 236));
-            tileBg.setStroke(dp(sourceIndex == stationIndex ? 3 : 1), borderColor);
-            tile.setBackground(tileBg);
-            tile.setPadding(dp(2), dp(2), dp(2), dp(2));
-            tile.setClickable(true);
-
             if (logo != 0) {
                 ImageView img = new ImageView(this);
                 img.setScaleType(ImageView.ScaleType.CENTER_CROP);
                 img.setImageResource(logo);
                 tile.addView(img, new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
             } else {
-                TextView fallback = makeText(s.shortName, 18, Typeface.BOLD);
-                fallback.setGravity(Gravity.CENTER);
-                fallback.setTextColor(Color.WHITE);
-                GradientDrawable fb = new GradientDrawable();
-                fb.setColor(NAVY);
-                fb.setCornerRadius(dp(3));
-                fallback.setBackground(fb);
+                StationBadgeView fallback = new StationBadgeView(this);
+                fallback.setStation(s.shortName);
+                fallback.setAccent(NAVY);
+                fallback.setDark(darkMode);
                 tile.addView(fallback, new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+
+            if (!selected) {
+                tile.setAlpha(darkMode ? 0.88f : 0.94f);
+            } else {
+                tile.setElevation(dp(5));
             }
 
             tile.setOnClickListener(v -> {
                 if (sourceIndex == stationIndex) return;
-                stationIndex = sourceIndex;
-                markRecent(stations.get(stationIndex));
-                renderStation();
-                rebuildGrid();
-                shouldPlay = true;
-                playCurrentStation(false);
-                gridScroll.smoothScrollTo(0, 0);
+                selectStation(sourceIndex, true);
             });
 
-            LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(dp(56), dp(56));
-            tileLp.rightMargin = dp(8);
+            tile.setOnLongClickListener(v -> {
+                if (sourceIndex != stationIndex) {
+                    selectStation(sourceIndex, true);
+                }
+                showAdminPanel();
+                return true;
+            });
+
+            LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(
+                    dp(tileSize), dp(tileSize));
+            tileLp.leftMargin = dp(6);
+            tileLp.rightMargin = dp(6);
             gridRow.addView(tile, tileLp);
         }
+
+        gridScroll.post(() -> {
+            scrollToSelected(true);
+            handler.postDelayed(() -> suppressCarouselSelection = false, 300L);
+        });
+    }
+
+    private int findNearestStationIndex() {
+        if (gridScroll == null || gridRow == null || gridRow.getChildCount() == 0) return -1;
+
+        int viewportCenter = gridScroll.getScrollX() + gridScroll.getWidth() / 2;
+        int nearestIndex = -1;
+        int nearestDistance = Integer.MAX_VALUE;
+
+        for (int i = 0; i < gridRow.getChildCount(); i++) {
+            View child = gridRow.getChildAt(i);
+            Object tag = child.getTag();
+            if (!(tag instanceof Integer)) continue;
+
+            int childCenter = child.getLeft() + child.getWidth() / 2;
+            int distance = Math.abs(childCenter - viewportCenter);
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestIndex = (Integer) tag;
+            }
+        }
+        return nearestIndex;
+    }
+
+    private void scrollToSelected(boolean smooth) {
+        if (gridScroll == null || gridRow == null) return;
+
+        View target = null;
+        for (int i = 0; i < gridRow.getChildCount(); i++) {
+            View child = gridRow.getChildAt(i);
+            Object tag = child.getTag();
+            if (tag instanceof Integer && ((Integer) tag) == stationIndex) {
+                target = child;
+                break;
+            }
+        }
+        if (target == null) return;
+
+        int x = target.getLeft() + target.getWidth() / 2 - gridScroll.getWidth() / 2;
+        x = Math.max(0, x);
+        if (smooth) gridScroll.smoothScrollTo(x, 0);
+        else gridScroll.scrollTo(x, 0);
+    }
+
+    private void selectStation(int index, boolean haptic) {
+        if (index < 0 || index >= stations.size() || index == stationIndex) return;
+
+        stationIndex = index;
+        if (haptic) vibrateStationTick();
+
+        markRecent(stations.get(stationIndex));
+        renderStation();
+        rebuildGrid();
+
+        shouldPlay = true;
+        playCurrentStation(false);
+    }
+
+    private void vibrateStationTick() {
+        try {
+            Vibrator vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            if (vibrator == null || !vibrator.hasVibrator()) return;
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(
+                        24L, VibrationEffect.DEFAULT_AMPLITUDE));
+            } else {
+                vibrator.vibrate(24L);
+            }
+        } catch (Exception ignored) { }
     }
 
     private List<Integer> orderedStationIndices() {
@@ -651,12 +706,8 @@ public class MainActivity extends Activity {
 
     private void changeStation(int direction) {
         if (stations.isEmpty()) return;
-        stationIndex = (stationIndex + direction + stations.size()) % stations.size();
-        markRecent(stations.get(stationIndex));
-        renderStation();
-        rebuildGrid();
-        shouldPlay = true;
-        playCurrentStation(false);
+        int next = (stationIndex + direction + stations.size()) % stations.size();
+        selectStation(next, true);
     }
 
     private void togglePlayback() {
@@ -701,7 +752,8 @@ public class MainActivity extends Activity {
             sourceView.setText("FM");
             updateSourcePill();
             updatePlayButton(false);
-            appendDiag("FM 103.4: PLAY abre la FM nativa");
+            appendDiag("FM 103.4: abriendo FM nativa");
+            if (!isRetry) launchSystemFm();
             return;
         }
 
@@ -908,7 +960,7 @@ public class MainActivity extends Activity {
 
         batteryView.setDark(darkMode);
         wifiView.invalidate();
-        mainFallbackView.setDark(darkMode);
+        if (mainFallbackView != null) mainFallbackView.setDark(darkMode);
 
         updateSourcePill();
         applyControlColors();
