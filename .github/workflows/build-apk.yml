@@ -15,23 +15,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Prepare embedded station logos
-        run: |
-          mkdir -p /tmp/radiocaribe-logos
-          mkdir -p app/src/main/res/drawable-nodpi
-          unzip -o assets/radiocaribe_logos.zip -d /tmp/radiocaribe-logos
-          cp "/tmp/radiocaribe-logos/RADIO TIEMPO.jpg" app/src/main/res/drawable-nodpi/radio_tiempo.jpg
-          cp "/tmp/radiocaribe-logos/OLIMPICABAQ.jpg" app/src/main/res/drawable-nodpi/olimpica_baq.jpg
-          cp "/tmp/radiocaribe-logos/OLIMPICASMR.jpg" app/src/main/res/drawable-nodpi/olimpica_smr.jpg
-          cp "/tmp/radiocaribe-logos/LA REINA.jpg" app/src/main/res/drawable-nodpi/la_reina.jpg
-          cp "/tmp/radiocaribe-logos/MIX.jpg" app/src/main/res/drawable-nodpi/mix.jpg
-          cp "/tmp/radiocaribe-logos/CANDENTE.jpg" app/src/main/res/drawable-nodpi/candente.jpg
-          cp "/tmp/radiocaribe-logos/CAYENA.jpg" app/src/main/res/drawable-nodpi/cayena.jpg
-          cp "/tmp/radiocaribe-logos/FORTALEZA.jpg" app/src/main/res/drawable-nodpi/fortaleza.jpg
-          cp "/tmp/radiocaribe-logos/EL SOL.jpg" app/src/main/res/drawable-nodpi/el_sol.jpg
-          cp "/tmp/radiocaribe-logos/FUEGO.jpg" app/src/main/res/drawable-nodpi/fuego.jpg
-
       - name: Java 17 for Android SDK tools
         uses: actions/setup-java@v5
         with:
