@@ -97,6 +97,7 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private ExoPlayer player;
     private AudioManager audioManager;
+    private InternalFmController fmController;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private int stationIndex = 0;
@@ -131,15 +132,19 @@ public class MainActivity extends Activity {
     private final boolean[] controlDown = new boolean[] {false, false, false};
     private boolean adminGestureLatched = false;
     private boolean suppressCarouselSelection = true;
+    private int carouselPreviewIndex = -1;
 
     private final Runnable carouselSnapRunnable = new Runnable() {
         @Override public void run() {
             if (suppressCarouselSelection || gridScroll == null || gridRow == null) return;
             int nearest = findNearestStationIndex();
             if (nearest < 0) return;
+
             if (nearest != stationIndex) {
-                selectStation(nearest, true);
+                // El cambio real de emisora sucede solo cuando el carrusel se detiene.
+                selectStation(nearest, false);
             } else {
+                renderStation();
                 scrollToSelected(true);
             }
         }
@@ -177,6 +182,7 @@ public class MainActivity extends Activity {
 
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        fmController = new InternalFmController(this, this::appendDiag);
 
         loadStations();
         stationIndex = Math.max(0, Math.min(stations.size() - 1, prefs.getInt(KEY_INDEX, 0)));
@@ -202,6 +208,7 @@ public class MainActivity extends Activity {
         handler.removeCallbacksAndMessages(null);
         try { unregisterReceiver(batteryReceiver); } catch (Exception ignored) { }
         releasePlayer();
+        if (fmController != null) fmController.stop();
         super.onDestroy();
     }
 
@@ -351,14 +358,24 @@ public class MainActivity extends Activity {
         gridRow = new LinearLayout(this);
         gridRow.setOrientation(LinearLayout.HORIZONTAL);
         gridRow.setGravity(Gravity.CENTER_VERTICAL);
-        gridRow.setPadding(dp(205), 0, dp(205), 0);
+        gridRow.setPadding(0, 0, 0, 0);
+        gridRow.setClipChildren(false);
         gridScroll.addView(gridRow, new HorizontalScrollView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         gridScroll.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
+            updateCarouselTransforms();
             if (suppressCarouselSelection) return;
+
+            int nearest = findNearestStationIndex();
+            if (nearest >= 0 && nearest != carouselPreviewIndex) {
+                carouselPreviewIndex = nearest;
+                previewStation(nearest);
+                vibrateCarouselTick();
+            }
+
             handler.removeCallbacks(carouselSnapRunnable);
-            handler.postDelayed(carouselSnapRunnable, 135L);
+            handler.postDelayed(carouselSnapRunnable, 145L);
         });
 
         FrameLayout.LayoutParams gridLp = new FrameLayout.LayoutParams(
@@ -527,17 +544,17 @@ public class MainActivity extends Activity {
         handler.removeCallbacks(carouselSnapRunnable);
         gridRow.removeAllViews();
 
+        final int tileSize = 138;
+
         for (int i = 0; i < stations.size(); i++) {
             final int sourceIndex = i;
             final Station s = stations.get(sourceIndex);
-            final boolean selected = sourceIndex == stationIndex;
-            final int tileSize = selected ? 222 : 118;
 
             FrameLayout tile = new FrameLayout(this);
             tile.setTag(sourceIndex);
             tile.setClickable(true);
             tile.setFocusable(true);
-            tile.setPadding(0, 0, 0, 0);
+            tile.setClipChildren(false);
 
             int logo = logoResFor(s);
             if (logo != 0) {
@@ -557,36 +574,94 @@ public class MainActivity extends Activity {
                         ViewGroup.LayoutParams.MATCH_PARENT));
             }
 
-            if (!selected) {
-                tile.setAlpha(darkMode ? 0.88f : 0.94f);
-            } else {
-                tile.setElevation(dp(5));
-            }
-
             tile.setOnClickListener(v -> {
-                if (sourceIndex == stationIndex) return;
-                selectStation(sourceIndex, true);
+                carouselPreviewIndex = sourceIndex;
+                previewStation(sourceIndex);
+                scrollToIndex(sourceIndex, true);
+                handler.removeCallbacks(carouselSnapRunnable);
+                handler.postDelayed(carouselSnapRunnable, 220L);
             });
 
             tile.setOnLongClickListener(v -> {
-                if (sourceIndex != stationIndex) {
-                    selectStation(sourceIndex, true);
+                if (sourceIndex == stationIndex) {
+                    showAdminPanel();
+                } else {
+                    scrollToIndex(sourceIndex, true);
                 }
-                showAdminPanel();
                 return true;
             });
 
             LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(
                     dp(tileSize), dp(tileSize));
-            tileLp.leftMargin = dp(6);
-            tileLp.rightMargin = dp(6);
+            tileLp.leftMargin = dp(5);
+            tileLp.rightMargin = dp(5);
             gridRow.addView(tile, tileLp);
         }
 
         gridScroll.post(() -> {
-            scrollToSelected(true);
-            handler.postDelayed(() -> suppressCarouselSelection = false, 300L);
+            int sidePadding = Math.max(0, gridScroll.getWidth() / 2 - dp(tileSize / 2f));
+            gridRow.setPadding(sidePadding, 0, sidePadding, 0);
+            carouselPreviewIndex = stationIndex;
+            scrollToSelected(false);
+            updateCarouselTransforms();
+            handler.postDelayed(() -> suppressCarouselSelection = false, 120L);
         });
+    }
+
+    private void updateCarouselTransforms() {
+        if (gridScroll == null || gridRow == null || gridScroll.getWidth() <= 0) return;
+
+        final float viewportCenter = gridScroll.getScrollX() + gridScroll.getWidth() / 2f;
+        final float influence = Math.max(dp(155), gridScroll.getWidth() * 0.34f);
+
+        for (int i = 0; i < gridRow.getChildCount(); i++) {
+            View child = gridRow.getChildAt(i);
+            float childCenter = child.getLeft() + child.getWidth() / 2f;
+            float distance = Math.abs(childCenter - viewportCenter);
+
+            float t = 1f - Math.min(1f, distance / influence);
+            // smoothstep: easeInOut continuo según se acerca al centro.
+            float eased = t * t * (3f - 2f * t);
+            float scale = 0.82f + 0.78f * eased;
+
+            child.setScaleX(scale);
+            child.setScaleY(scale);
+            child.setAlpha(0.78f + 0.22f * eased);
+            child.setTranslationZ(dp(12) * eased);
+        }
+    }
+
+    private void previewStation(int index) {
+        if (index < 0 || index >= stations.size()) return;
+        Station s = stations.get(index);
+
+        stationNameView.setText(s.name);
+        sourceView.setText(s.source);
+        frequencyView.setText(s.frequency);
+
+        int logoRes = logoResFor(s);
+        stationAccent = logoRes != 0 ? extractAccentColor(logoRes) : NAVY;
+        updateSourcePill();
+    }
+
+    private void scrollToIndex(int index, boolean smooth) {
+        if (gridScroll == null || gridRow == null) return;
+
+        View target = null;
+        for (int i = 0; i < gridRow.getChildCount(); i++) {
+            View child = gridRow.getChildAt(i);
+            Object tag = child.getTag();
+            if (tag instanceof Integer && ((Integer) tag) == index) {
+                target = child;
+                break;
+            }
+        }
+        if (target == null) return;
+
+        int x = target.getLeft() + target.getWidth() / 2 - gridScroll.getWidth() / 2;
+        x = Math.max(0, x);
+        if (smooth) gridScroll.smoothScrollTo(x, 0);
+        else gridScroll.scrollTo(x, 0);
     }
 
     private int findNearestStationIndex() {
@@ -612,37 +687,27 @@ public class MainActivity extends Activity {
     }
 
     private void scrollToSelected(boolean smooth) {
-        if (gridScroll == null || gridRow == null) return;
-
-        View target = null;
-        for (int i = 0; i < gridRow.getChildCount(); i++) {
-            View child = gridRow.getChildAt(i);
-            Object tag = child.getTag();
-            if (tag instanceof Integer && ((Integer) tag) == stationIndex) {
-                target = child;
-                break;
-            }
-        }
-        if (target == null) return;
-
-        int x = target.getLeft() + target.getWidth() / 2 - gridScroll.getWidth() / 2;
-        x = Math.max(0, x);
-        if (smooth) gridScroll.smoothScrollTo(x, 0);
-        else gridScroll.scrollTo(x, 0);
+        scrollToIndex(stationIndex, smooth);
     }
 
     private void selectStation(int index, boolean haptic) {
-        if (index < 0 || index >= stations.size() || index == stationIndex) return;
+        if (index < 0 || index >= stations.size()) return;
 
+        boolean changed = index != stationIndex;
         stationIndex = index;
-        if (haptic) vibrateStationTick();
+        carouselPreviewIndex = index;
+
+        if (changed && haptic) vibrateStationTick();
 
         markRecent(stations.get(stationIndex));
         renderStation();
-        rebuildGrid();
+        scrollToSelected(true);
+        updateCarouselTransforms();
 
-        shouldPlay = true;
-        playCurrentStation(false);
+        if (changed) {
+            shouldPlay = true;
+            playCurrentStation(false);
+        }
     }
 
     private void vibrateStationTick() {
@@ -655,6 +720,20 @@ public class MainActivity extends Activity {
                         24L, VibrationEffect.DEFAULT_AMPLITUDE));
             } else {
                 vibrator.vibrate(24L);
+            }
+        } catch (Exception ignored) { }
+    }
+
+    private void vibrateCarouselTick() {
+        try {
+            Vibrator vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            if (vibrator == null || !vibrator.hasVibrator()) return;
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(
+                        12L, VibrationEffect.DEFAULT_AMPLITUDE));
+            } else {
+                vibrator.vibrate(12L);
             }
         } catch (Exception ignored) { }
     }
@@ -715,7 +794,15 @@ public class MainActivity extends Activity {
         Station station = stations.get(stationIndex);
 
         if ("FM".equalsIgnoreCase(station.source)) {
-            launchSystemFm();
+            if (fmController != null && fmController.isPowered()) {
+                fmController.stopAsync();
+                sourceView.setText("FM");
+                updateSourcePill();
+                appendDiag("FM interno detenido");
+            } else {
+                shouldPlay = true;
+                playCurrentStation(false);
+            }
             return;
         }
 
@@ -748,13 +835,44 @@ public class MainActivity extends Activity {
 
         if ("FM".equalsIgnoreCase(station.source)) {
             preparing = false;
-            shouldPlay = false;
+            shouldPlay = true;
             sourceView.setText("FM");
             updateSourcePill();
-            updatePlayButton(false);
-            appendDiag("FM 103.4: abriendo FM nativa");
-            if (!isRetry) launchSystemFm();
+            appendDiag("FM interno: preparando " + station.frequency);
+
+            float frequency = 103.4f;
+            try {
+                String raw = station.url == null ? "" : station.url.replace("fm://", "").trim();
+                if (!raw.isEmpty()) frequency = Float.parseFloat(raw);
+            } catch (Exception ignored) { }
+
+            final float targetFrequency = frequency;
+            if (fmController == null) {
+                sourceView.setText("FM ERR");
+                updateSourcePill();
+                appendDiag("FM ERROR: controlador no inicializado");
+                return;
+            }
+
+            fmController.tune(targetFrequency, (ok, detail) -> {
+                if (stations.isEmpty()) return;
+                Station current = stations.get(stationIndex);
+                if (!"FM".equalsIgnoreCase(current.source)) return;
+
+                sourceView.setText(ok ? "FM" : "FM ERR");
+                updateSourcePill();
+                appendDiag(detail);
+                if (!ok) {
+                    Toast.makeText(this,
+                            "FM interno no pudo iniciar. Pulsa NET para ver el punto exacto.",
+                            Toast.LENGTH_LONG).show();
+                }
+            });
             return;
+        }
+
+        if (fmController != null && fmController.isPowered()) {
+            fmController.stopAsync();
         }
 
         if (!isNetworkAvailable()) {
@@ -851,18 +969,6 @@ public class MainActivity extends Activity {
                     } catch (Exception ignored) { }
                 }
             }, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
-        }
-    }
-
-    private void launchSystemFm() {
-        try {
-            Intent intent = new Intent();
-            intent.setClassName("com.android.fmradio", "com.android.fmradio.FmMainActivity");
-            startActivity(intent);
-            appendDiag("FM nativa abierta; sintoniza 103.4");
-        } catch (Exception e) {
-            Toast.makeText(this, "No pude abrir la app FM del sistema", Toast.LENGTH_LONG).show();
-            appendDiag("FM ERROR: " + e.getClass().getSimpleName());
         }
     }
 
