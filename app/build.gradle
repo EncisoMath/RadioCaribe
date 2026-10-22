@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace 'com.radiocaribe.tuner'
-    compileSdk 28
+    compileSdk 33
 
     defaultConfig {
         applicationId 'com.radiocaribe.tuner'
@@ -20,7 +20,8 @@ android {
     }
 
     dependencies {
-        implementation 'com.google.android.exoplayer:exoplayer:2.19.1'
+        implementation 'com.google.android.exoplayer:exoplayer-core:2.19.1'
+        implementation 'com.google.android.exoplayer:exoplayer-hls:2.19.1'
     }
 
     buildTypes {
