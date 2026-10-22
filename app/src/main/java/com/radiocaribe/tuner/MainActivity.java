@@ -468,7 +468,7 @@ public class MainActivity extends Activity {
     private int logoResFor(Station s) {
         String n = s.name.toUpperCase(Locale.ROOT);
 
-        if (n.contains("RADIO TIEMPO")) return R.drawable.radio_tiempo;
+        if (n.contains("MACONDO")) return R.drawable.macondo;\n        if (n.contains("RADIO TIEMPO")) return R.drawable.radio_tiempo;
         if (n.contains("OLÍMPICA") || n.contains("OLIMPICA")) {
             if (n.contains("SANTA MARTA")) return R.drawable.olimpica_smr;
             return R.drawable.olimpica_baq;
