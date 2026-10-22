@@ -19,25 +19,7 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
 
-    def stableKeystore = file('../radiocaribe-debug.jks')
-
-    signingConfigs {
-        stableDebug {
-            if (stableKeystore.exists()) {
-                storeFile stableKeystore
-                storePassword 'radiocaribe'
-                keyAlias 'radiocaribe'
-                keyPassword 'radiocaribe'
-            }
-        }
-    }
-
     buildTypes {
-        debug {
-            if (stableKeystore.exists()) {
-                signingConfig signingConfigs.stableDebug
-            }
-        }
         release {
             minifyEnabled false
             shrinkResources false
