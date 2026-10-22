@@ -2,8 +2,13 @@ package com.radiocaribe.tuner;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -13,7 +18,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
-import android.content.Intent;
+import android.os.BatteryManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -27,20 +32,21 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
-
-import org.json.JSONArray;
-import org.json.JSONObject;
 
 import com.google.android.exoplayer2.ExoPlayer;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
 import com.google.android.exoplayer2.Player;
 
-import java.io.IOException;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -48,7 +54,10 @@ import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 public class MainActivity extends Activity {
 
@@ -56,12 +65,13 @@ public class MainActivity extends Activity {
     private static final String KEY_INDEX = "last_station";
     private static final String KEY_DARK = "dark_theme";
     private static final String KEY_STATIONS = "station_list_v2";
+    private static final String KEY_RECENTS = "recent_urls_v1";
 
+    private static final int NAVY = Color.rgb(10, 31, 58);
     private static final int BLUE = Color.rgb(18, 139, 255);
-    private static final int CYAN = Color.rgb(0, 207, 235);
-    private static final int LIGHT_BG = Color.rgb(247, 250, 253);
-    private static final int LIGHT_TEXT = Color.rgb(9, 31, 58);
-    private static final int DARK_BG = Color.rgb(4, 14, 28);
+    private static final int LIGHT_BG = Color.rgb(250, 251, 253);
+    private static final int LIGHT_TEXT = Color.rgb(8, 18, 34);
+    private static final int DARK_BG = Color.rgb(5, 13, 25);
     private static final int DARK_TEXT = Color.WHITE;
 
     private static class Station {
@@ -91,20 +101,29 @@ public class MainActivity extends Activity {
     private boolean shouldPlay = true;
     private boolean preparing = false;
     private long connectStartMs = 0L;
+    private int stationAccent = NAVY;
 
     private FrameLayout root;
     private TextView clockView;
     private TextView themeView;
     private TextView diagnosticButton;
     private TextView diagnosticView;
+    private BatteryView batteryView;
     private WifiView wifiView;
-    private StationBadgeView badgeView;
+
+    private FrameLayout mainLogoBox;
+    private ImageView mainLogoView;
+    private StationBadgeView mainFallbackView;
+
+    private HorizontalScrollView gridScroll;
+    private LinearLayout gridRow;
+
     private TextView stationNameView;
     private TextView sourceView;
     private TextView frequencyView;
-    private RoundButton previousButton;
-    private RoundButton playButton;
-    private RoundButton nextButton;
+    private ColorButton previousButton;
+    private ColorButton playButton;
+    private ColorButton nextButton;
 
     private final boolean[] controlDown = new boolean[] {false, false, false};
     private boolean adminGestureLatched = false;
@@ -123,31 +142,48 @@ public class MainActivity extends Activity {
         }
     };
 
+    private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+            if (level >= 0 && scale > 0 && batteryView != null) {
+                batteryView.setPercent(Math.round(level * 100f / scale));
+            }
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
 
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+
         loadStations();
         stationIndex = Math.max(0, Math.min(stations.size() - 1, prefs.getInt(KEY_INDEX, 0)));
         darkMode = prefs.getBoolean(KEY_DARK, false);
 
         buildUi();
         enterImmersiveMode();
+        registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         clockTicker.run();
+
+        markRecent(stations.get(stationIndex));
+        rebuildGrid();
         playCurrentStation(false);
     }
 
     @Override protected void onResume() {
         super.onResume();
         enterImmersiveMode();
+        if (wifiView != null) wifiView.invalidate();
     }
 
     @Override protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        try { unregisterReceiver(batteryReceiver); } catch (Exception ignored) { }
         releasePlayer();
         super.onDestroy();
     }
@@ -225,114 +261,171 @@ public class MainActivity extends Activity {
         root = new FrameLayout(this);
         setContentView(root);
 
-        themeView = makeTopButton("☾", 22);
-        FrameLayout.LayoutParams themeLp = new FrameLayout.LayoutParams(dp(46), dp(46), Gravity.TOP | Gravity.LEFT);
-        themeLp.leftMargin = dp(14);
-        themeLp.topMargin = dp(9);
-        root.addView(themeView, themeLp);
-        themeView.setOnClickListener(v -> toggleTheme());
-
-        diagnosticButton = makeTopButton("NET", 13);
-        FrameLayout.LayoutParams diagBtnLp = new FrameLayout.LayoutParams(dp(54), dp(46), Gravity.TOP | Gravity.LEFT);
-        diagBtnLp.leftMargin = dp(68);
-        diagBtnLp.topMargin = dp(9);
-        root.addView(diagnosticButton, diagBtnLp);
-        diagnosticButton.setOnClickListener(v -> toggleDiagnostics());
-
-        LinearLayout clockRow = new LinearLayout(this);
-        clockRow.setOrientation(LinearLayout.HORIZONTAL);
-        clockRow.setGravity(Gravity.CENTER_VERTICAL);
-        wifiView = new WifiView(this);
-        clockRow.addView(wifiView, new LinearLayout.LayoutParams(dp(38), dp(34)));
-        clockView = makeText("00:00", 29, Typeface.BOLD);
-        LinearLayout.LayoutParams clockTextLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(42));
-        clockTextLp.leftMargin = dp(4);
-        clockRow.addView(clockView, clockTextLp);
-        FrameLayout.LayoutParams clockLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48), Gravity.TOP | Gravity.RIGHT);
-        clockLp.rightMargin = dp(17);
-        clockLp.topMargin = dp(8);
-        root.addView(clockRow, clockLp);
-
-        LinearLayout center = new LinearLayout(this);
-        center.setOrientation(LinearLayout.VERTICAL);
-        center.setGravity(Gravity.CENTER_HORIZONTAL);
-        FrameLayout.LayoutParams centerLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        centerLp.leftMargin = dp(28);
-        centerLp.rightMargin = dp(28);
-        centerLp.topMargin = dp(45);
-        centerLp.bottomMargin = dp(6);
-        root.addView(center, centerLp);
-
-        badgeView = new StationBadgeView(this);
-        LinearLayout.LayoutParams badgeLp = new LinearLayout.LayoutParams(dp(108), dp(108));
-        center.addView(badgeView, badgeLp);
-
-        stationNameView = makeText("", 23, Typeface.BOLD);
-        stationNameView.setGravity(Gravity.CENTER);
-        stationNameView.setMaxLines(1);
-        LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38));
-        nameLp.topMargin = dp(2);
-        center.addView(stationNameView, nameLp);
-
-        LinearLayout meta = new LinearLayout(this);
-        meta.setOrientation(LinearLayout.HORIZONTAL);
-        meta.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams metaLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34));
-        center.addView(meta, metaLp);
-
-        sourceView = makeText("● ONLINE", 14, Typeface.BOLD);
-        sourceView.setGravity(Gravity.CENTER);
-        sourceView.setPadding(dp(12), 0, dp(12), 0);
-        meta.addView(sourceView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)));
-
-        TextView divider = makeText("|", 17, Typeface.NORMAL);
-        divider.setAlpha(0.45f);
-        divider.setGravity(Gravity.CENTER);
-        meta.addView(divider, new LinearLayout.LayoutParams(dp(24), dp(28)));
-
-        frequencyView = makeText("", 15, Typeface.BOLD);
-        frequencyView.setGravity(Gravity.CENTER);
-        meta.addView(frequencyView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)));
-
-        LinearLayout controls = new LinearLayout(this);
-        controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams controlsLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(82));
-        controlsLp.topMargin = dp(2);
-        center.addView(controls, controlsLp);
-
-        previousButton = new RoundButton(this, "<", false);
-        playButton = new RoundButton(this, "II", true);
-        nextButton = new RoundButton(this, ">", false);
-
-        LinearLayout.LayoutParams sideLp = new LinearLayout.LayoutParams(dp(64), dp(64));
-        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(dp(76), dp(76));
-        playLp.leftMargin = dp(32);
-        playLp.rightMargin = dp(32);
-        controls.addView(previousButton, sideLp);
-        controls.addView(playButton, playLp);
-        controls.addView(nextButton, sideLp);
-
-        previousButton.setOnTouchListener(new ControlTouchListener(0, () -> changeStation(-1)));
-        playButton.setOnTouchListener(new ControlTouchListener(1, this::togglePlayback));
-        nextButton.setOnTouchListener(new ControlTouchListener(2, () -> changeStation(1)));
-
-        diagnosticView = makeText("", 11, Typeface.NORMAL);
-        diagnosticView.setTypeface(Typeface.MONOSPACE);
-        diagnosticView.setGravity(Gravity.TOP | Gravity.LEFT);
-        diagnosticView.setPadding(dp(10), dp(7), dp(10), dp(7));
-        diagnosticView.setVisibility(View.GONE);
-        diagnosticView.setMaxLines(6);
-        FrameLayout.LayoutParams diagLp = new FrameLayout.LayoutParams(dp(360), dp(100), Gravity.TOP | Gravity.LEFT);
-        diagLp.leftMargin = dp(14);
-        diagLp.topMargin = dp(60);
-        root.addView(diagnosticView, diagLp);
+        buildTopStatusBar();
+        buildMainLogo();
+        buildRightPanel();
+        buildDiagnostics();
 
         applyTheme();
         renderStation();
     }
 
-    private TextView makeTopButton(String label, float sp) {
+    private void buildTopStatusBar() {
+        LinearLayout leftStatus = new LinearLayout(this);
+        leftStatus.setOrientation(LinearLayout.HORIZONTAL);
+        leftStatus.setGravity(Gravity.CENTER_VERTICAL);
+
+        batteryView = new BatteryView(this);
+        leftStatus.addView(batteryView, new LinearLayout.LayoutParams(dp(56), dp(34)));
+
+        wifiView = new WifiView(this);
+        LinearLayout.LayoutParams wifiLp = new LinearLayout.LayoutParams(dp(38), dp(34));
+        wifiLp.leftMargin = dp(4);
+        leftStatus.addView(wifiView, wifiLp);
+
+        themeView = makeIconButton("☾", 22);
+        LinearLayout.LayoutParams themeLp = new LinearLayout.LayoutParams(dp(38), dp(34));
+        themeLp.leftMargin = dp(3);
+        leftStatus.addView(themeView, themeLp);
+        themeView.setOnClickListener(v -> toggleTheme());
+
+        diagnosticButton = makeIconButton("NET", 12);
+        LinearLayout.LayoutParams netLp = new LinearLayout.LayoutParams(dp(48), dp(32));
+        netLp.leftMargin = dp(4);
+        leftStatus.addView(diagnosticButton, netLp);
+        diagnosticButton.setOnClickListener(v -> toggleDiagnostics());
+
+        FrameLayout.LayoutParams leftLp = new FrameLayout.LayoutParams(dp(192), dp(42), Gravity.TOP | Gravity.LEFT);
+        leftLp.leftMargin = dp(12);
+        leftLp.topMargin = dp(4);
+        root.addView(leftStatus, leftLp);
+
+        clockView = makeText("", 22, Typeface.BOLD);
+        clockView.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
+        clockView.setSingleLine(true);
+        FrameLayout.LayoutParams clockLp = new FrameLayout.LayoutParams(dp(410), dp(42), Gravity.TOP | Gravity.RIGHT);
+        clockLp.rightMargin = dp(15);
+        clockLp.topMargin = dp(3);
+        root.addView(clockView, clockLp);
+    }
+
+    private void buildMainLogo() {
+        mainLogoBox = new FrameLayout(this);
+
+        mainLogoView = new ImageView(this);
+        mainLogoView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        mainLogoBox.addView(mainLogoView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        mainFallbackView = new StationBadgeView(this);
+        mainFallbackView.setVisibility(View.GONE);
+        mainLogoBox.addView(mainFallbackView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        FrameLayout.LayoutParams logoLp = new FrameLayout.LayoutParams(dp(244), dp(244), Gravity.TOP | Gravity.LEFT);
+        logoLp.leftMargin = dp(14);
+        logoLp.topMargin = dp(52);
+        root.addView(mainLogoBox, logoLp);
+    }
+
+    private void buildRightPanel() {
+        FrameLayout panel = new FrameLayout(this);
+        FrameLayout.LayoutParams panelLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        panelLp.leftMargin = dp(270);
+        panelLp.rightMargin = dp(10);
+        panelLp.topMargin = dp(48);
+        panelLp.bottomMargin = dp(5);
+        root.addView(panel, panelLp);
+
+        gridScroll = new HorizontalScrollView(this);
+        gridScroll.setHorizontalScrollBarEnabled(false);
+        gridScroll.setFillViewport(false);
+        gridScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+
+        gridRow = new LinearLayout(this);
+        gridRow.setOrientation(LinearLayout.HORIZONTAL);
+        gridRow.setGravity(Gravity.CENTER_VERTICAL);
+        gridScroll.addView(gridRow, new HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        FrameLayout.LayoutParams gridLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(76), Gravity.TOP);
+        panel.addView(gridScroll, gridLp);
+
+        stationNameView = makeText("", 23, Typeface.BOLD);
+        stationNameView.setSingleLine(true);
+        stationNameView.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
+        FrameLayout.LayoutParams nameLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(38), Gravity.TOP);
+        nameLp.topMargin = dp(87);
+        panel.addView(stationNameView, nameLp);
+
+        LinearLayout meta = new LinearLayout(this);
+        meta.setOrientation(LinearLayout.HORIZONTAL);
+        meta.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+
+        sourceView = makeText("ONLINE", 13, Typeface.BOLD);
+        sourceView.setGravity(Gravity.CENTER);
+        sourceView.setPadding(dp(12), 0, dp(12), 0);
+        meta.addView(sourceView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)));
+
+        frequencyView = makeText("", 14, Typeface.BOLD);
+        frequencyView.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
+        LinearLayout.LayoutParams freqLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(28));
+        freqLp.leftMargin = dp(10);
+        meta.addView(frequencyView, freqLp);
+
+        FrameLayout.LayoutParams metaLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(30), Gravity.TOP);
+        metaLp.topMargin = dp(128);
+        panel.addView(meta, metaLp);
+
+        LinearLayout controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.HORIZONTAL);
+        controls.setGravity(Gravity.CENTER);
+
+        previousButton = new ColorButton(this, "◀", false);
+        playButton = new ColorButton(this, "▶", true);
+        nextButton = new ColorButton(this, "▶", false);
+
+        LinearLayout.LayoutParams sideLp = new LinearLayout.LayoutParams(dp(72), dp(72));
+        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(dp(82), dp(82));
+        playLp.leftMargin = dp(28);
+        playLp.rightMargin = dp(28);
+
+        controls.addView(previousButton, sideLp);
+        controls.addView(playButton, playLp);
+        controls.addView(nextButton, sideLp);
+
+        FrameLayout.LayoutParams controlsLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(86), Gravity.TOP);
+        controlsLp.topMargin = dp(172);
+        panel.addView(controls, controlsLp);
+
+        previousButton.setOnTouchListener(new ControlTouchListener(0, () -> changeStation(-1)));
+        playButton.setOnTouchListener(new ControlTouchListener(1, this::togglePlayback));
+        nextButton.setOnTouchListener(new ControlTouchListener(2, () -> changeStation(1)));
+    }
+
+    private void buildDiagnostics() {
+        diagnosticView = makeText("", 11, Typeface.NORMAL);
+        diagnosticView.setTypeface(Typeface.MONOSPACE);
+        diagnosticView.setGravity(Gravity.TOP | Gravity.LEFT);
+        diagnosticView.setPadding(dp(10), dp(7), dp(10), dp(7));
+        diagnosticView.setVisibility(View.GONE);
+        diagnosticView.setMaxLines(7);
+        diagnosticView.setElevation(dp(12));
+
+        FrameLayout.LayoutParams diagLp = new FrameLayout.LayoutParams(dp(350), dp(116), Gravity.TOP | Gravity.RIGHT);
+        diagLp.rightMargin = dp(12);
+        diagLp.topMargin = dp(48);
+        root.addView(diagnosticView, diagLp);
+    }
+
+    private TextView makeIconButton(String label, float sp) {
         TextView v = makeText(label, sp, Typeface.BOLD);
         v.setGravity(Gravity.CENTER);
         v.setClickable(true);
@@ -343,19 +436,224 @@ public class MainActivity extends Activity {
     private void renderStation() {
         if (stations.isEmpty()) addDefaultStations();
         stationIndex = Math.max(0, Math.min(stationIndex, stations.size() - 1));
+
         Station s = stations.get(stationIndex);
         stationNameView.setText(s.name);
-        sourceView.setText("● " + s.source);
+        sourceView.setText(s.source);
         frequencyView.setText(s.frequency);
-        badgeView.setStation(s.shortName);
+
+        int logoRes = logoResFor(s);
+        stationAccent = logoRes != 0 ? extractAccentColor(logoRes) : NAVY;
+
+        if (logoRes != 0) {
+            mainLogoView.setImageResource(logoRes);
+            mainLogoView.setVisibility(View.VISIBLE);
+            mainFallbackView.setVisibility(View.GONE);
+        } else {
+            mainLogoView.setImageDrawable(null);
+            mainLogoView.setVisibility(View.GONE);
+            mainFallbackView.setStation(s.shortName);
+            mainFallbackView.setAccent(NAVY);
+            mainFallbackView.setVisibility(View.VISIBLE);
+        }
+
+        updateSourcePill();
+        applyControlColors();
         updatePlayButton(player != null && player.isPlaying());
+
         prefs.edit().putInt(KEY_INDEX, stationIndex).apply();
+        if (wifiView != null) wifiView.invalidate();
+    }
+
+    private int logoResFor(Station s) {
+        String n = s.name.toUpperCase(Locale.ROOT);
+
+        if (n.contains("RADIO TIEMPO")) return R.drawable.radio_tiempo;
+        if (n.contains("OLÍMPICA") || n.contains("OLIMPICA")) {
+            if (n.contains("SANTA MARTA")) return R.drawable.olimpica_smr;
+            return R.drawable.olimpica_baq;
+        }
+        if (n.contains("LA REINA")) return R.drawable.la_reina;
+        if (n.contains("MIX")) return R.drawable.mix;
+        if (n.contains("CANDENTE")) return R.drawable.candente;
+        if (n.contains("CAYENA")) return R.drawable.cayena;
+        if (n.contains("FORTALEZA")) return R.drawable.fortaleza;
+        if (n.contains("EL SOL")) return R.drawable.el_sol;
+        if (n.contains("FUEGO")) return R.drawable.fuego;
+
+        return 0;
+    }
+
+    private int extractAccentColor(int resId) {
+        try {
+            Bitmap bitmap = BitmapFactory.decodeResource(getResources(), resId);
+            if (bitmap == null) return NAVY;
+
+            int bins = 24;
+            float[] weights = new float[bins];
+            float[] sumR = new float[bins];
+            float[] sumG = new float[bins];
+            float[] sumB = new float[bins];
+
+            int stepX = Math.max(1, bitmap.getWidth() / 60);
+            int stepY = Math.max(1, bitmap.getHeight() / 60);
+            float[] hsv = new float[3];
+
+            for (int y = 0; y < bitmap.getHeight(); y += stepY) {
+                for (int x = 0; x < bitmap.getWidth(); x += stepX) {
+                    int c = bitmap.getPixel(x, y);
+                    if (Color.alpha(c) < 180) continue;
+
+                    Color.colorToHSV(c, hsv);
+                    if (hsv[1] < 0.28f || hsv[2] < 0.20f || hsv[2] > 0.97f) continue;
+
+                    int bin = Math.min(bins - 1, (int) (hsv[0] / 360f * bins));
+                    float w = hsv[1] * (0.35f + hsv[2]);
+                    weights[bin] += w;
+                    sumR[bin] += Color.red(c) * w;
+                    sumG[bin] += Color.green(c) * w;
+                    sumB[bin] += Color.blue(c) * w;
+                }
+            }
+
+            int best = -1;
+            float bestWeight = 0;
+            for (int i = 0; i < bins; i++) {
+                if (weights[i] > bestWeight) {
+                    bestWeight = weights[i];
+                    best = i;
+                }
+            }
+
+            if (best < 0 || weights[best] <= 0) return NAVY;
+
+            int color = Color.rgb(
+                    Math.round(sumR[best] / weights[best]),
+                    Math.round(sumG[best] / weights[best]),
+                    Math.round(sumB[best] / weights[best]));
+
+            Color.colorToHSV(color, hsv);
+            hsv[1] = Math.max(0.62f, hsv[1]);
+            if (darkMode) {
+                hsv[2] = Math.max(0.78f, Math.min(0.95f, hsv[2]));
+            } else {
+                hsv[2] = Math.max(0.52f, Math.min(0.78f, hsv[2]));
+            }
+            return Color.HSVToColor(hsv);
+        } catch (Exception ignored) {
+            return NAVY;
+        }
+    }
+
+    private void rebuildGrid() {
+        if (gridRow == null) return;
+        gridRow.removeAllViews();
+
+        List<Integer> ordered = orderedStationIndices();
+        for (int idx : ordered) {
+            final int sourceIndex = idx;
+            Station s = stations.get(sourceIndex);
+
+            FrameLayout tile = new FrameLayout(this);
+            GradientDrawable tileBg = new GradientDrawable();
+            tileBg.setColor(darkMode ? Color.rgb(13, 24, 39) : Color.WHITE);
+            tileBg.setCornerRadius(dp(4));
+
+            int logo = logoResFor(s);
+            int borderColor = sourceIndex == stationIndex
+                    ? (logo != 0 ? extractAccentColor(logo) : NAVY)
+                    : (darkMode ? Color.rgb(50, 61, 75) : Color.rgb(226, 230, 236));
+            tileBg.setStroke(dp(sourceIndex == stationIndex ? 3 : 1), borderColor);
+            tile.setBackground(tileBg);
+            tile.setPadding(dp(2), dp(2), dp(2), dp(2));
+            tile.setClickable(true);
+
+            if (logo != 0) {
+                ImageView img = new ImageView(this);
+                img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                img.setImageResource(logo);
+                tile.addView(img, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            } else {
+                TextView fallback = makeText(s.shortName, 18, Typeface.BOLD);
+                fallback.setGravity(Gravity.CENTER);
+                fallback.setTextColor(Color.WHITE);
+                GradientDrawable fb = new GradientDrawable();
+                fb.setColor(NAVY);
+                fb.setCornerRadius(dp(3));
+                fallback.setBackground(fb);
+                tile.addView(fallback, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+
+            tile.setOnClickListener(v -> {
+                if (sourceIndex == stationIndex) return;
+                stationIndex = sourceIndex;
+                markRecent(stations.get(stationIndex));
+                renderStation();
+                rebuildGrid();
+                shouldPlay = true;
+                playCurrentStation(false);
+                gridScroll.smoothScrollTo(0, 0);
+            });
+
+            LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(dp(66), dp(66));
+            tileLp.rightMargin = dp(8);
+            gridRow.addView(tile, tileLp);
+        }
+    }
+
+    private List<Integer> orderedStationIndices() {
+        ArrayList<Integer> result = new ArrayList<>();
+        Set<Integer> used = new LinkedHashSet<>();
+        List<String> recentUrls = loadRecentUrls();
+
+        for (String url : recentUrls) {
+            for (int i = 0; i < stations.size(); i++) {
+                if (url.equals(stations.get(i).url) && used.add(i)) {
+                    result.add(i);
+                    break;
+                }
+            }
+        }
+
+        for (int i = 0; i < stations.size(); i++) {
+            if (used.add(i)) result.add(i);
+        }
+
+        return result;
+    }
+
+    private List<String> loadRecentUrls() {
+        ArrayList<String> urls = new ArrayList<>();
+        try {
+            JSONArray a = new JSONArray(prefs.getString(KEY_RECENTS, "[]"));
+            for (int i = 0; i < a.length(); i++) {
+                String url = a.optString(i, "");
+                if (!url.isEmpty() && !urls.contains(url)) urls.add(url);
+            }
+        } catch (Exception ignored) { }
+        return urls;
+    }
+
+    private void markRecent(Station station) {
+        ArrayList<String> urls = new ArrayList<>(loadRecentUrls());
+        urls.remove(station.url);
+        urls.add(0, station.url);
+
+        while (urls.size() > 30) urls.remove(urls.size() - 1);
+
+        JSONArray a = new JSONArray();
+        for (String url : urls) a.put(url);
+        prefs.edit().putString(KEY_RECENTS, a.toString()).apply();
     }
 
     private void changeStation(int direction) {
         if (stations.isEmpty()) return;
         stationIndex = (stationIndex + direction + stations.size()) % stations.size();
+        markRecent(stations.get(stationIndex));
         renderStation();
+        rebuildGrid();
         shouldPlay = true;
         playCurrentStation(false);
     }
@@ -373,13 +671,13 @@ public class MainActivity extends Activity {
             if (player.isPlaying()) {
                 player.pause();
                 shouldPlay = false;
-                appendDiag("PLAYER pause");
+                appendDiag("PLAYER pausa");
                 updatePlayButton(false);
                 return;
             } else if (player.getPlaybackState() == Player.STATE_READY) {
                 shouldPlay = true;
                 player.play();
-                appendDiag("PLAYER resume");
+                appendDiag("PLAYER reanuda");
                 updatePlayButton(true);
                 return;
             }
@@ -399,16 +697,18 @@ public class MainActivity extends Activity {
         if ("FM".equalsIgnoreCase(station.source)) {
             preparing = false;
             shouldPlay = false;
-            sourceView.setText("● FM");
+            sourceView.setText("FM");
+            updateSourcePill();
             updatePlayButton(false);
-            appendDiag("FM 103.4: usa PLAY para abrir la radio FM");
+            appendDiag("FM 103.4: PLAY abre la FM nativa");
             return;
         }
 
         if (!isNetworkAvailable()) {
             preparing = false;
             updatePlayButton(false);
-            sourceView.setText("● SIN RED");
+            sourceView.setText("SIN RED");
+            updateSourcePill();
             appendDiag("RED: sin conexión");
             handler.postDelayed(retryRunnable, 5000L);
             return;
@@ -416,7 +716,8 @@ public class MainActivity extends Activity {
 
         preparing = true;
         connectStartMs = System.currentTimeMillis();
-        sourceView.setText("● ABRIENDO");
+        sourceView.setText("ABRIENDO");
+        updateSourcePill();
         appendDiag((isRetry ? "RETRY " : "OPEN  ") + station.name);
         updatePlayButton(true);
 
@@ -424,17 +725,18 @@ public class MainActivity extends Activity {
         player = p;
 
         p.addListener(new Player.Listener() {
-            @Override
-            public void onPlaybackStateChanged(int state) {
+            @Override public void onPlaybackStateChanged(int state) {
                 if (p != player) return;
 
                 if (state == Player.STATE_BUFFERING) {
-                    sourceView.setText("● BUFFER");
+                    sourceView.setText("BUFFER");
+                    updateSourcePill();
                     appendDiag("PLAYER buffer");
                 } else if (state == Player.STATE_READY) {
                     preparing = false;
                     long elapsed = System.currentTimeMillis() - connectStartMs;
-                    sourceView.setText("● " + station.source);
+                    sourceView.setText(station.source);
+                    updateSourcePill();
                     appendDiag("PLAYER listo: " + elapsed + " ms");
                     updatePlayButton(shouldPlay);
                 } else if (state == Player.STATE_ENDED) {
@@ -443,11 +745,11 @@ public class MainActivity extends Activity {
                 }
             }
 
-            @Override
-            public void onPlayerError(PlaybackException error) {
+            @Override public void onPlayerError(PlaybackException error) {
                 if (p != player) return;
                 preparing = false;
-                sourceView.setText("● ERROR");
+                sourceView.setText("ERROR");
+                updateSourcePill();
                 appendDiag("EXO " + error.getErrorCodeName());
                 updatePlayButton(false);
                 if (shouldPlay) handler.postDelayed(retryRunnable, isRetry ? 8000L : 4500L);
@@ -461,7 +763,8 @@ public class MainActivity extends Activity {
             p.prepare();
         } catch (Exception e) {
             preparing = false;
-            sourceView.setText("● ERROR");
+            sourceView.setText("ERROR");
+            updateSourcePill();
             appendDiag("ERROR apertura: " + e.getClass().getSimpleName());
             updatePlayButton(false);
             if (shouldPlay) handler.postDelayed(retryRunnable, 5000L);
@@ -503,7 +806,7 @@ public class MainActivity extends Activity {
             Intent intent = new Intent();
             intent.setClassName("com.android.fmradio", "com.android.fmradio.FmMainActivity");
             startActivity(intent);
-            appendDiag("FM nativa abierta; sintoniza 103.4 una vez");
+            appendDiag("FM nativa abierta; sintoniza 103.4");
         } catch (Exception e) {
             Toast.makeText(this, "No pude abrir la app FM del sistema", Toast.LENGTH_LONG).show();
             appendDiag("FM ERROR: " + e.getClass().getSimpleName());
@@ -533,7 +836,7 @@ public class MainActivity extends Activity {
             String current = diagnosticView.getText().toString();
             String[] lines = current.isEmpty() ? new String[0] : current.split("\n");
             StringBuilder out = new StringBuilder();
-            int start = Math.max(0, lines.length - 4);
+            int start = Math.max(0, lines.length - 5);
             for (int i = start; i < lines.length; i++) {
                 if (!lines[i].isEmpty()) out.append(lines[i]).append("\n");
             }
@@ -546,7 +849,14 @@ public class MainActivity extends Activity {
     private void runNetworkDiagnostics() {
         if (stations.isEmpty()) return;
         Station s = stations.get(stationIndex);
+
+        if ("FM".equalsIgnoreCase(s.source)) {
+            appendDiag("FM: no usa Internet");
+            return;
+        }
+
         appendDiag("RED: " + (isNetworkAvailable() ? "conectada" : "sin red"));
+
         new Thread(() -> {
             try {
                 URL u = new URL(s.url);
@@ -574,13 +884,18 @@ public class MainActivity extends Activity {
     private void toggleTheme() {
         darkMode = !darkMode;
         prefs.edit().putBoolean(KEY_DARK, darkMode).apply();
+
+        int logo = logoResFor(stations.get(stationIndex));
+        stationAccent = logo != 0 ? extractAccentColor(logo) : NAVY;
+
         applyTheme();
+        rebuildGrid();
     }
 
     private void applyTheme() {
         int bg = darkMode ? DARK_BG : LIGHT_BG;
         int text = darkMode ? DARK_TEXT : LIGHT_TEXT;
-        int secondary = darkMode ? Color.rgb(205, 220, 239) : Color.rgb(91, 111, 139);
+        int secondary = darkMode ? Color.rgb(198, 210, 225) : Color.rgb(80, 94, 111);
 
         root.setBackgroundColor(bg);
         clockView.setTextColor(text);
@@ -590,56 +905,81 @@ public class MainActivity extends Activity {
         diagnosticButton.setTextColor(text);
         themeView.setText(darkMode ? "☀" : "☾");
 
-        GradientDrawable themeBg = topButtonBackground(darkMode);
-        themeView.setBackground(themeBg);
-        diagnosticButton.setBackground(topButtonBackground(darkMode));
+        batteryView.setDark(darkMode);
+        wifiView.invalidate();
+        mainFallbackView.setDark(darkMode);
 
-        GradientDrawable pill = new GradientDrawable();
-        pill.setCornerRadius(dp(18));
-        pill.setColor(darkMode ? Color.rgb(4, 45, 92) : Color.rgb(219, 239, 255));
-        sourceView.setBackground(pill);
-        sourceView.setTextColor(darkMode ? Color.rgb(64, 205, 255) : Color.rgb(0, 104, 222));
+        updateSourcePill();
+        applyControlColors();
 
         GradientDrawable diagBg = new GradientDrawable();
-        diagBg.setCornerRadius(dp(10));
-        diagBg.setColor(darkMode ? Color.argb(245, 8, 24, 43) : Color.argb(245, 255, 255, 255));
-        diagBg.setStroke(dp(1), darkMode ? Color.rgb(49, 86, 120) : Color.rgb(205, 218, 232));
+        diagBg.setCornerRadius(dp(8));
+        diagBg.setColor(darkMode ? Color.argb(248, 8, 22, 39) : Color.argb(248, 255, 255, 255));
+        diagBg.setStroke(dp(1), darkMode ? Color.rgb(48, 65, 85) : Color.rgb(210, 217, 226));
         diagnosticView.setBackground(diagBg);
-        diagnosticView.setTextColor(darkMode ? Color.rgb(198, 232, 255) : Color.rgb(25, 55, 82));
-
-        badgeView.setDark(darkMode);
-        previousButton.applyTheme(darkMode);
-        playButton.applyTheme(darkMode);
-        nextButton.applyTheme(darkMode);
-        if (wifiView != null) wifiView.invalidate();
+        diagnosticView.setTextColor(darkMode ? Color.rgb(208, 230, 250) : NAVY);
 
         getWindow().setNavigationBarColor(bg);
         getWindow().setStatusBarColor(bg);
     }
 
-    private GradientDrawable topButtonBackground(boolean dark) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setShape(GradientDrawable.OVAL);
-        gd.setColor(dark ? Color.rgb(14, 32, 54) : Color.WHITE);
-        gd.setStroke(dp(1), dark ? Color.rgb(35, 63, 93) : Color.rgb(226, 234, 244));
-        return gd;
+    private void updateSourcePill() {
+        if (sourceView == null) return;
+
+        String state = sourceView.getText().toString();
+        boolean fm = "FM".equalsIgnoreCase(state);
+        boolean error = state.contains("ERROR") || state.contains("SIN RED");
+        boolean pending = state.contains("ABRIENDO") || state.contains("BUFFER");
+
+        GradientDrawable pill = new GradientDrawable();
+        pill.setCornerRadius(dp(8));
+
+        if (error) {
+            pill.setColor(darkMode ? Color.rgb(92, 24, 31) : Color.rgb(255, 220, 224));
+            sourceView.setTextColor(darkMode ? Color.rgb(255, 170, 178) : Color.rgb(150, 16, 29));
+        } else if (pending) {
+            pill.setColor(darkMode ? Color.rgb(74, 59, 15) : Color.rgb(255, 239, 180));
+            sourceView.setTextColor(darkMode ? Color.rgb(255, 220, 110) : Color.rgb(120, 87, 0));
+        } else if (fm) {
+            pill.setColor(darkMode ? Color.rgb(17, 54, 93) : Color.rgb(218, 236, 255));
+            sourceView.setTextColor(darkMode ? Color.rgb(125, 193, 255) : Color.rgb(18, 91, 166));
+        } else {
+            pill.setColor(darkMode ? Color.rgb(36, 78, 28) : Color.rgb(190, 255, 111));
+            sourceView.setTextColor(darkMode ? Color.rgb(180, 255, 145) : Color.rgb(15, 78, 17));
+        }
+
+        sourceView.setBackground(pill);
+    }
+
+    private void applyControlColors() {
+        if (previousButton == null) return;
+
+        int c = stationAccent;
+        previousButton.setAccent(c, darkMode);
+        playButton.setAccent(c, darkMode);
+        nextButton.setAccent(c, darkMode);
     }
 
     private void updatePlayButton(boolean playing) {
-        if (playButton != null) {
-            Station s = stations.isEmpty() ? null : stations.get(stationIndex);
-            if (s != null && "FM".equalsIgnoreCase(s.source)) {
-                playButton.setText("FM");
-            } else {
-                playButton.setText(playing ? "II" : "PLAY");
-            }
+        if (playButton == null || stations.isEmpty()) return;
+
+        Station s = stations.get(stationIndex);
+        if ("FM".equalsIgnoreCase(s.source)) {
+            playButton.setText("FM");
+            playButton.setTextSize(18);
+        } else {
+            playButton.setText(playing ? "Ⅱ" : "▶");
+            playButton.setTextSize(playing ? 27 : 38);
         }
     }
 
     private void updateClock() {
-        if (clockView != null) {
-            clockView.setText(new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date()));
-        }
+        if (clockView == null) return;
+
+        Locale es = new Locale("es", "CO");
+        String value = new SimpleDateFormat("EEEE, d 'de' MMMM | HH:mm", es).format(new Date());
+        if (!value.isEmpty()) value = Character.toUpperCase(value.charAt(0)) + value.substring(1);
+        clockView.setText(value);
     }
 
     private void showAdminPanel() {
@@ -681,7 +1021,8 @@ public class MainActivity extends Activity {
         m3u.setTextSize(12);
         m3u.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         m3u.setHint("#EXTM3U\n#EXTINF:-1,Mi Radio\nhttps://...");
-        box.addView(m3u, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(150)));
+        box.addView(m3u, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(150)));
 
         Button importButton = new Button(this);
         importButton.setText("IMPORTAR M3U");
@@ -700,15 +1041,25 @@ public class MainActivity extends Activity {
             String newName = name.getText().toString().trim();
             String newFreq = freq.getText().toString().trim();
             String newUrl = url.getText().toString().trim();
+
             if (newName.isEmpty() || newUrl.isEmpty()) {
                 Toast.makeText(this, "Nombre y URL son obligatorios", Toast.LENGTH_SHORT).show();
                 return;
             }
+
             String source = newUrl.startsWith("fm://") ? "FM" : "ONLINE";
-            stations.set(stationIndex, new Station(initialsFor(newName), newName,
-                    newFreq.isEmpty() ? source : newFreq, source, newUrl));
+            stations.set(stationIndex, new Station(
+                    initialsFor(newName),
+                    newName,
+                    newFreq.isEmpty() ? source : newFreq,
+                    source,
+                    newUrl));
+
             saveStations();
+            markRecent(stations.get(stationIndex));
             renderStation();
+            rebuildGrid();
+
             shouldPlay = true;
             playCurrentStation(false);
             Toast.makeText(this, "Emisora actualizada", Toast.LENGTH_SHORT).show();
@@ -719,10 +1070,15 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "Debe quedar al menos una emisora", Toast.LENGTH_SHORT).show();
                 return;
             }
+
             stations.remove(stationIndex);
             if (stationIndex >= stations.size()) stationIndex = stations.size() - 1;
+
             saveStations();
+            markRecent(stations.get(stationIndex));
             renderStation();
+            rebuildGrid();
+
             shouldPlay = true;
             playCurrentStation(false);
             dialog.dismiss();
@@ -733,6 +1089,7 @@ public class MainActivity extends Activity {
             int added = importM3u(m3u.getText().toString());
             if (added > 0) {
                 saveStations();
+                rebuildGrid();
                 Toast.makeText(this, added + " emisora(s) importada(s)", Toast.LENGTH_SHORT).show();
                 m3u.setText("");
             } else {
@@ -743,7 +1100,12 @@ public class MainActivity extends Activity {
         reset.setOnClickListener(v -> {
             addDefaultStations();
             stationIndex = 0;
+            prefs.edit().remove(KEY_RECENTS).apply();
+            markRecent(stations.get(stationIndex));
+
             renderStation();
+            rebuildGrid();
+
             shouldPlay = true;
             playCurrentStation(false);
             dialog.dismiss();
@@ -760,40 +1122,51 @@ public class MainActivity extends Activity {
         e.setText(value);
         e.setTextSize(14);
         e.setSingleLine(true);
-        e.setSelectAllOnFocus(false);
         return e;
     }
 
     private int importM3u(String raw) {
         if (raw == null || raw.trim().isEmpty()) return 0;
+
         String[] lines = raw.replace("\r", "").split("\n");
         String pendingName = null;
         int added = 0;
+
         for (String original : lines) {
             String line = original.trim();
             if (line.isEmpty()) continue;
+
             if (line.startsWith("#EXTINF")) {
                 int comma = line.lastIndexOf(',');
                 pendingName = comma >= 0 ? line.substring(comma + 1).trim() : "RADIO IMPORTADA";
-            } else if (!line.startsWith("#") && (line.startsWith("http://") || line.startsWith("https://"))) {
-                String name = pendingName == null || pendingName.isEmpty() ? "RADIO IMPORTADA " + (added + 1) : pendingName;
+            } else if (!line.startsWith("#") &&
+                    (line.startsWith("http://") || line.startsWith("https://"))) {
+
+                String name = pendingName == null || pendingName.isEmpty()
+                        ? "RADIO IMPORTADA " + (added + 1)
+                        : pendingName;
+
                 stations.add(new Station(initialsFor(name), name, "ONLINE", "ONLINE", line));
                 pendingName = null;
                 added++;
             }
         }
+
         return added;
     }
 
     private String initialsFor(String name) {
         String clean = name == null ? "RC" : name.trim().toUpperCase(Locale.getDefault());
         if (clean.isEmpty()) return "RC";
+
         String[] words = clean.split("\\s+");
         StringBuilder s = new StringBuilder();
+
         for (String word : words) {
             if (!word.isEmpty()) s.append(word.charAt(0));
             if (s.length() == 2) break;
         }
+
         if (s.length() == 1 && clean.length() > 1) s.append(clean.charAt(1));
         return s.toString();
     }
@@ -809,18 +1182,25 @@ public class MainActivity extends Activity {
 
         @Override public boolean onTouch(View v, MotionEvent event) {
             int actionCode = event.getActionMasked();
+
             if (actionCode == MotionEvent.ACTION_DOWN) {
                 controlDown[index] = true;
-                v.setAlpha(0.65f);
-                if (!adminGestureLatched && controlDown[0] && controlDown[1] && controlDown[2]) {
+                v.setAlpha(0.55f);
+
+                if (!adminGestureLatched &&
+                        controlDown[0] && controlDown[1] && controlDown[2]) {
                     adminGestureLatched = true;
                     showAdminPanel();
                 }
                 return true;
             }
 
-            if (actionCode == MotionEvent.ACTION_UP || actionCode == MotionEvent.ACTION_CANCEL) {
-                boolean execute = !adminGestureLatched && actionCode == MotionEvent.ACTION_UP;
+            if (actionCode == MotionEvent.ACTION_UP ||
+                    actionCode == MotionEvent.ACTION_CANCEL) {
+
+                boolean execute = !adminGestureLatched &&
+                        actionCode == MotionEvent.ACTION_UP;
+
                 controlDown[index] = false;
                 v.setAlpha(1f);
 
@@ -830,6 +1210,7 @@ public class MainActivity extends Activity {
                 if (execute) action.run();
                 return true;
             }
+
             return true;
         }
     }
@@ -858,43 +1239,60 @@ public class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private class RoundButton extends TextView {
+    private class ColorButton extends TextView {
         private final boolean primary;
+        private int accent = NAVY;
 
-        RoundButton(Context context, String text, boolean primary) {
+        ColorButton(Context context, String text, boolean primary) {
             super(context);
             this.primary = primary;
             setText(text);
             setGravity(Gravity.CENTER);
-            setTextSize(primary ? 20 : 32);
             setTypeface(Typeface.DEFAULT_BOLD);
             setIncludeFontPadding(false);
-            setElevation(dp(primary ? 7 : 5));
             setClickable(true);
             setFocusable(true);
+
+            if (primary) {
+                setTextSize(38);
+                setElevation(dp(5));
+            } else {
+                setTextSize(35);
+            }
         }
 
-        void applyTheme(boolean dark) {
-            GradientDrawable gd = new GradientDrawable();
-            gd.setShape(GradientDrawable.OVAL);
-            if (primary) {
-                gd.setColor(BLUE);
-                gd.setStroke(dp(2), dark ? Color.rgb(27, 200, 255) : Color.rgb(72, 184, 255));
-                setTextColor(Color.WHITE);
-            } else {
-                gd.setColor(dark ? Color.rgb(10, 27, 47) : Color.WHITE);
-                gd.setStroke(dp(2), dark ? Color.rgb(44, 71, 101) : Color.rgb(226, 234, 243));
-                setTextColor(dark ? Color.WHITE : LIGHT_TEXT);
+        void setAccent(int color, boolean dark) {
+            accent = color;
+
+            float[] hsv = new float[3];
+            Color.colorToHSV(accent, hsv);
+            if (dark && hsv[2] < 0.72f) {
+                hsv[2] = 0.86f;
+                accent = Color.HSVToColor(hsv);
             }
-            setBackground(gd);
+
+            if (primary) {
+                GradientDrawable gd = new GradientDrawable();
+                gd.setShape(GradientDrawable.OVAL);
+                gd.setColor(accent);
+                setBackground(gd);
+
+                float luminance = (0.299f * Color.red(accent) +
+                        0.587f * Color.green(accent) +
+                        0.114f * Color.blue(accent)) / 255f;
+                setTextColor(luminance > 0.72f ? NAVY : Color.WHITE);
+            } else {
+                setBackgroundColor(Color.TRANSPARENT);
+                setTextColor(accent);
+            }
         }
     }
 
     private class StationBadgeView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF oval = new RectF();
         private String initials = "RC";
         private boolean dark;
+        private int accent = NAVY;
 
         StationBadgeView(Context context) {
             super(context);
@@ -911,40 +1309,82 @@ public class MainActivity extends Activity {
             invalidate();
         }
 
+        void setAccent(int value) {
+            accent = value;
+            invalidate();
+        }
+
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
+
             float w = getWidth();
             float h = getHeight();
             float cx = w / 2f;
             float cy = h / 2f;
-            float radius = Math.min(w, h) * 0.40f;
+            float radius = Math.min(w, h) * 0.46f;
 
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(dark ? Color.rgb(5, 22, 42) : Color.WHITE);
-            paint.setShadowLayer(dp(10), 0, dp(4), dark ? Color.argb(140, 0, 137, 255) : Color.argb(45, 14, 128, 240));
-            canvas.drawCircle(cx, cy, radius, paint);
-            paint.clearShadowLayer();
-
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(3));
-            paint.setColor(dark ? CYAN : Color.rgb(55, 161, 245));
+            paint.setColor(accent);
             canvas.drawCircle(cx, cy, radius, paint);
 
-            paint.setStyle(Paint.Style.FILL);
             paint.setTypeface(Typeface.create("sans", Typeface.BOLD));
             paint.setTextAlign(Paint.Align.CENTER);
-            paint.setTextSize(radius * 0.75f);
-            paint.setColor(dark ? Color.WHITE : LIGHT_TEXT);
-            Paint.FontMetrics fm = paint.getFontMetrics();
-            float base = cy - (fm.ascent + fm.descent) / 2f - dp(3);
-            canvas.drawText(initials, cx, base, paint);
+            paint.setTextSize(radius * 0.66f);
+            paint.setColor(Color.WHITE);
 
-            paint.setColor(BLUE);
-            oval.set(cx - radius * 0.48f, cy + radius * 0.34f, cx + radius * 0.48f, cy + radius * 0.54f);
-            canvas.drawOval(oval, paint);
-            paint.setColor(CYAN);
-            oval.set(cx - radius * 0.36f, cy + radius * 0.44f, cx + radius * 0.36f, cy + radius * 0.60f);
-            canvas.drawOval(oval, paint);
+            Paint.FontMetrics fm = paint.getFontMetrics();
+            float base = cy - (fm.ascent + fm.descent) / 2f;
+            canvas.drawText(initials, cx, base, paint);
+        }
+    }
+
+    private class BatteryView extends View {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF body = new RectF();
+        private int percent = 0;
+        private boolean dark;
+
+        BatteryView(Context context) {
+            super(context);
+        }
+
+        void setPercent(int value) {
+            percent = Math.max(0, Math.min(100, value));
+            invalidate();
+        }
+
+        void setDark(boolean value) {
+            dark = value;
+            invalidate();
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+
+            int color = dark ? Color.WHITE : LIGHT_TEXT;
+            int w = getWidth();
+            int h = getHeight();
+
+            float left = dp(2);
+            float top = dp(6);
+            float right = w - dp(6);
+            float bottom = h - dp(6);
+
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(dp(2));
+            p.setColor(color);
+            body.set(left, top, right, bottom);
+            canvas.drawRoundRect(body, dp(4), dp(4), p);
+
+            p.setStyle(Paint.Style.FILL);
+            canvas.drawRect(right + dp(1), top + dp(6), right + dp(4), bottom - dp(6), p);
+
+            p.setTypeface(Typeface.create("sans", Typeface.BOLD));
+            p.setTextAlign(Paint.Align.CENTER);
+            p.setTextSize(dp(10));
+            Paint.FontMetrics fm = p.getFontMetrics();
+            float base = h / 2f - (fm.ascent + fm.descent) / 2f;
+            canvas.drawText(percent + "%", (left + right) / 2f, base, p);
         }
     }
 
@@ -958,20 +1398,26 @@ public class MainActivity extends Activity {
 
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
+
             int c = darkMode ? Color.WHITE : LIGHT_TEXT;
+            if (!isNetworkAvailable()) c = Color.rgb(145, 145, 145);
+
             p.setColor(c);
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeCap(Paint.Cap.ROUND);
-            p.setStrokeWidth(dp(2.5f));
+            p.setStrokeWidth(dp(2.2f));
+
             float cx = getWidth() / 2f;
             float cy = getHeight() * 0.72f;
+
             for (int i = 0; i < 3; i++) {
-                float rad = dp(5 + i * 5);
+                float rad = dp(4.5f + i * 4.5f);
                 r.set(cx - rad, cy - rad, cx + rad, cy + rad);
                 canvas.drawArc(r, 220, 100, false, p);
             }
+
             p.setStyle(Paint.Style.FILL);
-            canvas.drawCircle(cx, cy + dp(1), dp(2), p);
+            canvas.drawCircle(cx, cy + dp(1), dp(1.8f), p);
         }
     }
 }
