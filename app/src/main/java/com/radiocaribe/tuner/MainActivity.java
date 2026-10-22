@@ -11,9 +11,9 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
-import android.media.MediaPlayer;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -34,6 +34,11 @@ import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+
+import com.google.android.exoplayer2.ExoPlayer;
+import com.google.android.exoplayer2.MediaItem;
+import com.google.android.exoplayer2.PlaybackException;
+import com.google.android.exoplayer2.Player;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -77,7 +82,7 @@ public class MainActivity extends Activity {
 
     private final ArrayList<Station> stations = new ArrayList<>();
     private SharedPreferences prefs;
-    private MediaPlayer player;
+    private ExoPlayer player;
     private AudioManager audioManager;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -173,10 +178,12 @@ public class MainActivity extends Activity {
             }
         }
         if (stations.isEmpty()) addDefaultStations();
+        ensureMacondo();
     }
 
     private void addDefaultStations() {
         stations.clear();
+        stations.add(new Station("MC", "MACONDO STEREO", "103.4 FM", "FM", "fm://103.4"));
         stations.add(new Station("RT", "RADIO TIEMPO BARRANQUILLA", "96.1 FM", "ONLINE", "https://playerservices.streamtheworld.com/api/livestream-redirect/RT_BARRANQUILLAAAC.aac"));
         stations.add(new Station("OL", "OLÍMPICA BARRANQUILLA", "92.1 FM", "ONLINE", "https://playerservices.streamtheworld.com/api/livestream-redirect/OLP_BARRANQUILLAAAC_SC"));
         stations.add(new Station("LR", "LA REINA BARRANQUILLA", "98.6 FM", "ONLINE", "https://playerservices.streamtheworld.com/api/livestream-redirect/RNA_BARRANQUILLA_SC"));
@@ -187,6 +194,14 @@ public class MainActivity extends Activity {
         stations.add(new Station("OL", "OLÍMPICA SANTA MARTA", "97.1 FM", "ONLINE", "https://playerservices.streamtheworld.com/api/livestream-redirect/OLP_SANTA_MARTAAAC.aac"));
         stations.add(new Station("ES", "EL SOL SANTA MARTA", "106.9 FM", "ONLINE", "https://mdstrm.com/audio/632ce8986d2e8108b23d249f/live.m3u8"));
         stations.add(new Station("FG", "FUEGO STEREO", "101.9 FM", "ONLINE", "http://real2.streaming-co.com:8747/stream/"));
+        saveStations();
+    }
+
+    private void ensureMacondo() {
+        for (Station s : stations) {
+            if ("FM".equalsIgnoreCase(s.source) && s.frequency.contains("103.4")) return;
+        }
+        stations.add(0, new Station("MC", "MACONDO STEREO", "103.4 FM", "FM", "fm://103.4"));
         saveStations();
     }
 
@@ -333,6 +348,7 @@ public class MainActivity extends Activity {
         sourceView.setText("● " + s.source);
         frequencyView.setText(s.frequency);
         badgeView.setStation(s.shortName);
+        updatePlayButton(player != null && player.isPlaying());
         prefs.edit().putInt(KEY_INDEX, stationIndex).apply();
     }
 
@@ -345,26 +361,31 @@ public class MainActivity extends Activity {
     }
 
     private void togglePlayback() {
-        if (player != null && !preparing) {
-            boolean playingNow = false;
-            try { playingNow = player.isPlaying(); } catch (IllegalStateException ignored) { }
-            if (playingNow) {
+        if (stations.isEmpty()) return;
+        Station station = stations.get(stationIndex);
+
+        if ("FM".equalsIgnoreCase(station.source)) {
+            launchSystemFm();
+            return;
+        }
+
+        if (player != null) {
+            if (player.isPlaying()) {
                 player.pause();
                 shouldPlay = false;
                 appendDiag("PLAYER pause");
                 updatePlayButton(false);
                 return;
-            }
-        }
-        shouldPlay = true;
-        if (player != null && !preparing) {
-            try {
-                player.start();
+            } else if (player.getPlaybackState() == Player.STATE_READY) {
+                shouldPlay = true;
+                player.play();
                 appendDiag("PLAYER resume");
                 updatePlayButton(true);
                 return;
-            } catch (IllegalStateException ignored) { }
+            }
         }
+
+        shouldPlay = true;
         playCurrentStation(false);
     }
 
@@ -374,6 +395,15 @@ public class MainActivity extends Activity {
 
         if (stations.isEmpty()) return;
         Station station = stations.get(stationIndex);
+
+        if ("FM".equalsIgnoreCase(station.source)) {
+            preparing = false;
+            shouldPlay = false;
+            sourceView.setText("● FM");
+            updatePlayButton(false);
+            appendDiag("FM 103.4: usa PLAY para abrir la radio FM");
+            return;
+        }
 
         if (!isNetworkAvailable()) {
             preparing = false;
@@ -386,45 +416,50 @@ public class MainActivity extends Activity {
 
         preparing = true;
         connectStartMs = System.currentTimeMillis();
-        sourceView.setText("● CONECTANDO");
+        sourceView.setText("● ABRIENDO");
         appendDiag((isRetry ? "RETRY " : "OPEN  ") + station.name);
         updatePlayButton(true);
 
-        MediaPlayer p = new MediaPlayer();
+        ExoPlayer p = new ExoPlayer.Builder(this).build();
         player = p;
-        p.setAudioStreamType(AudioManager.STREAM_MUSIC);
-        p.setOnPreparedListener(mp -> {
-            if (mp != player) return;
-            preparing = false;
-            long elapsed = System.currentTimeMillis() - connectStartMs;
-            sourceView.setText("● " + station.source);
-            appendDiag("PLAYER listo: " + elapsed + " ms");
-            if (shouldPlay) {
-                mp.start();
-                updatePlayButton(true);
-            } else {
-                updatePlayButton(false);
+
+        p.addListener(new Player.Listener() {
+            @Override
+            public void onPlaybackStateChanged(int state) {
+                if (p != player) return;
+
+                if (state == Player.STATE_BUFFERING) {
+                    sourceView.setText("● BUFFER");
+                    appendDiag("PLAYER buffer");
+                } else if (state == Player.STATE_READY) {
+                    preparing = false;
+                    long elapsed = System.currentTimeMillis() - connectStartMs;
+                    sourceView.setText("● " + station.source);
+                    appendDiag("PLAYER listo: " + elapsed + " ms");
+                    updatePlayButton(shouldPlay);
+                } else if (state == Player.STATE_ENDED) {
+                    appendDiag("PLAYER fin de stream");
+                    if (shouldPlay) handler.postDelayed(retryRunnable, 1500L);
+                }
             }
-        });
-        p.setOnErrorListener((mp, what, extra) -> {
-            if (mp != player) return true;
-            preparing = false;
-            sourceView.setText("● REINTENTANDO");
-            appendDiag("ERROR player what=" + what + " extra=" + extra);
-            updatePlayButton(false);
-            if (shouldPlay) handler.postDelayed(retryRunnable, isRetry ? 8000L : 4500L);
-            return true;
-        });
-        p.setOnCompletionListener(mp -> {
-            appendDiag("PLAYER fin de stream");
-            if (shouldPlay) handler.postDelayed(retryRunnable, 1500L);
+
+            @Override
+            public void onPlayerError(PlaybackException error) {
+                if (p != player) return;
+                preparing = false;
+                sourceView.setText("● ERROR");
+                appendDiag("EXO " + error.getErrorCodeName());
+                updatePlayButton(false);
+                if (shouldPlay) handler.postDelayed(retryRunnable, isRetry ? 8000L : 4500L);
+            }
         });
 
         try {
             requestAudioFocus();
-            p.setDataSource(station.url);
-            p.prepareAsync();
-        } catch (IOException | IllegalArgumentException | SecurityException e) {
+            p.setMediaItem(MediaItem.fromUri(station.url));
+            p.setPlayWhenReady(shouldPlay);
+            p.prepare();
+        } catch (Exception e) {
             preparing = false;
             sourceView.setText("● ERROR");
             appendDiag("ERROR apertura: " + e.getClass().getSimpleName());
@@ -434,11 +469,11 @@ public class MainActivity extends Activity {
     }
 
     private void releasePlayer() {
-        MediaPlayer old = player;
+        ExoPlayer old = player;
         player = null;
         preparing = false;
         if (old != null) {
-            try { old.reset(); } catch (Exception ignored) { }
+            try { old.stop(); } catch (Exception ignored) { }
             try { old.release(); } catch (Exception ignored) { }
         }
     }
@@ -446,17 +481,32 @@ public class MainActivity extends Activity {
     private void requestAudioFocus() {
         if (audioManager != null) {
             audioManager.requestAudioFocus(focusChange -> {
-                if (focusChange < 0 && player != null && !preparing) {
+                if (focusChange < 0 && player != null) {
                     try {
                         if (player.isPlaying()) {
                             player.pause();
                             updatePlayButton(false);
                         }
                     } catch (Exception ignored) { }
-                } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN && shouldPlay && player != null && !preparing) {
-                    try { player.start(); updatePlayButton(true); } catch (Exception ignored) { }
+                } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN && shouldPlay && player != null) {
+                    try {
+                        player.play();
+                        updatePlayButton(true);
+                    } catch (Exception ignored) { }
                 }
             }, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
+        }
+    }
+
+    private void launchSystemFm() {
+        try {
+            Intent intent = new Intent();
+            intent.setClassName("com.android.fmradio", "com.android.fmradio.FmMainActivity");
+            startActivity(intent);
+            appendDiag("FM nativa abierta; sintoniza 103.4 una vez");
+        } catch (Exception e) {
+            Toast.makeText(this, "No pude abrir la app FM del sistema", Toast.LENGTH_LONG).show();
+            appendDiag("FM ERROR: " + e.getClass().getSimpleName());
         }
     }
 
@@ -576,7 +626,14 @@ public class MainActivity extends Activity {
     }
 
     private void updatePlayButton(boolean playing) {
-        if (playButton != null) playButton.setText(playing ? "II" : "PLAY");
+        if (playButton != null) {
+            Station s = stations.isEmpty() ? null : stations.get(stationIndex);
+            if (s != null && "FM".equalsIgnoreCase(s.source)) {
+                playButton.setText("FM");
+            } else {
+                playButton.setText(playing ? "II" : "PLAY");
+            }
+        }
     }
 
     private void updateClock() {
@@ -647,8 +704,9 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "Nombre y URL son obligatorios", Toast.LENGTH_SHORT).show();
                 return;
             }
+            String source = newUrl.startsWith("fm://") ? "FM" : "ONLINE";
             stations.set(stationIndex, new Station(initialsFor(newName), newName,
-                    newFreq.isEmpty() ? "ONLINE" : newFreq, "ONLINE", newUrl));
+                    newFreq.isEmpty() ? source : newFreq, source, newUrl));
             saveStations();
             renderStation();
             shouldPlay = true;
