@@ -322,8 +322,8 @@ public class MainActivity extends Activity {
         mainLogoBox.addView(mainFallbackView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        FrameLayout.LayoutParams logoLp = new FrameLayout.LayoutParams(dp(244), dp(244), Gravity.TOP | Gravity.LEFT);
-        logoLp.leftMargin = dp(14);
+        FrameLayout.LayoutParams logoLp = new FrameLayout.LayoutParams(dp(292), dp(292), Gravity.TOP | Gravity.LEFT);
+        logoLp.leftMargin = dp(8);
         logoLp.topMargin = dp(52);
         root.addView(mainLogoBox, logoLp);
     }
@@ -332,10 +332,10 @@ public class MainActivity extends Activity {
         FrameLayout panel = new FrameLayout(this);
         FrameLayout.LayoutParams panelLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        panelLp.leftMargin = dp(270);
-        panelLp.rightMargin = dp(10);
+        panelLp.leftMargin = dp(308);
+        panelLp.rightMargin = dp(8);
         panelLp.topMargin = dp(48);
-        panelLp.bottomMargin = dp(5);
+        panelLp.bottomMargin = dp(4);
         root.addView(panel, panelLp);
 
         gridScroll = new HorizontalScrollView(this);
@@ -350,15 +350,15 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         FrameLayout.LayoutParams gridLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(76), Gravity.TOP);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(66), Gravity.TOP);
         panel.addView(gridScroll, gridLp);
 
-        stationNameView = makeText("", 23, Typeface.BOLD);
+        stationNameView = makeText("", 21, Typeface.BOLD);
         stationNameView.setSingleLine(true);
         stationNameView.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
         FrameLayout.LayoutParams nameLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(38), Gravity.TOP);
-        nameLp.topMargin = dp(87);
+        nameLp.topMargin = dp(74);
         panel.addView(stationNameView, nameLp);
 
         LinearLayout meta = new LinearLayout(this);
@@ -380,7 +380,7 @@ public class MainActivity extends Activity {
 
         FrameLayout.LayoutParams metaLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(30), Gravity.TOP);
-        metaLp.topMargin = dp(128);
+        metaLp.topMargin = dp(116);
         panel.addView(meta, metaLp);
 
         LinearLayout controls = new LinearLayout(this);
@@ -391,18 +391,18 @@ public class MainActivity extends Activity {
         playButton = new ColorButton(this, "▶", true);
         nextButton = new ColorButton(this, "▶", false);
 
-        LinearLayout.LayoutParams sideLp = new LinearLayout.LayoutParams(dp(72), dp(72));
-        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(dp(82), dp(82));
-        playLp.leftMargin = dp(28);
-        playLp.rightMargin = dp(28);
+        LinearLayout.LayoutParams sideLp = new LinearLayout.LayoutParams(dp(76), dp(76));
+        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(dp(92), dp(92));
+        playLp.leftMargin = dp(20);
+        playLp.rightMargin = dp(20);
 
         controls.addView(previousButton, sideLp);
         controls.addView(playButton, playLp);
         controls.addView(nextButton, sideLp);
 
         FrameLayout.LayoutParams controlsLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(86), Gravity.TOP);
-        controlsLp.topMargin = dp(172);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(96), Gravity.BOTTOM);
+        controlsLp.bottomMargin = dp(0);
         panel.addView(controls, controlsLp);
 
         previousButton.setOnTouchListener(new ControlTouchListener(0, () -> changeStation(-1)));
@@ -598,7 +598,7 @@ public class MainActivity extends Activity {
                 gridScroll.smoothScrollTo(0, 0);
             });
 
-            LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(dp(66), dp(66));
+            LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(dp(56), dp(56));
             tileLp.rightMargin = dp(8);
             gridRow.addView(tile, tileLp);
         }
