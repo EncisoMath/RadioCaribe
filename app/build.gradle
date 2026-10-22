@@ -4,14 +4,24 @@ plugins {
 
 android {
     namespace 'com.radiocaribe.tuner'
-    compileSdk 28
+    compileSdk 33
 
     defaultConfig {
         applicationId 'com.radiocaribe.tuner'
         minSdk 23
         targetSdk 28
-        versionCode 1
-        versionName '0.1'
+        versionCode 4
+        versionName '0.4'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    dependencies {
+        implementation 'com.google.android.exoplayer:exoplayer-core:2.19.1'
+        implementation 'com.google.android.exoplayer:exoplayer-hls:2.19.1'
     }
 
     buildTypes {
