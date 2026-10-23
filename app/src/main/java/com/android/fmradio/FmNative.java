@@ -1,34 +1,81 @@
 package com.android.fmradio;
 
+import android.content.Context;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+
 /**
- * Minimal JNI bridge compatible with the LineageOS FMRadio libfmjni ABI.
- * The native library registers methods against this exact class name.
+ * Moto G3 / LineageOS 16 FM JNI bridge.
+ * Preloads the system-matched libc++ before loading the FM JNI library.
  */
 public final class FmNative {
     private static boolean loaded = false;
-    private static String loadMessage = "not attempted";
-
-    static {
-        try {
-            System.loadLibrary("fmjni");
-            loaded = true;
-            loadMessage = "APK/lib/armeabi-v7a/libfmjni.so cargada";
-        } catch (Throwable t) {
-            loaded = false;
-            loadMessage = t.getClass().getSimpleName() + ": " +
-                    String.valueOf(t.getMessage());
-        }
-    }
+    private static boolean attempted = false;
+    private static String loadMessage = "pendiente";
 
     private FmNative() { }
 
-    public static boolean isLoaded() {
+    public static synchronized boolean load(Context context) {
+        if (attempted) return loaded;
+        attempted = true;
+        String preloadedFrom = "";
+        try {
+            try {
+                System.loadLibrary("c++");
+                preloadedFrom = "loadLibrary(c++)";
+            } catch (Throwable first) {
+                File cpp = new File(context.getApplicationInfo().nativeLibraryDir, "libc++.so");
+                if (!cpp.isFile()) cpp = extractCppFromApk(context);
+                try {
+                    System.load(cpp.getAbsolutePath());
+                    preloadedFrom = "load(" + cpp.getAbsolutePath() + ")";
+                } catch (Throwable second) {
+                    loadMessage = "libc++ ERROR: " + shortError(first) +
+                            " | ruta alternativa: " + shortError(second);
+                    return false;
+                }
+            }
+            System.loadLibrary("fmjni");
+            loaded = true;
+            loadMessage = "libc++ OK (" + preloadedFrom + "), libfmjni OK";
+        } catch (Throwable error) {
+            loaded = false;
+            loadMessage = "libc++ " + (preloadedFrom.isEmpty() ? "SIN CARGAR" : "OK") +
+                    ", libfmjni ERROR: " + shortError(error);
+        }
         return loaded;
     }
 
-    public static String getLoadMessage() {
-        return loadMessage;
+    private static File extractCppFromApk(Context context) throws Exception {
+        File target = new File(context.getDir("radiocaribe_native", Context.MODE_PRIVATE), "libc++.so");
+        try (ZipFile apk = new ZipFile(context.getApplicationInfo().sourceDir)) {
+            ZipEntry entry = apk.getEntry("lib/armeabi-v7a/libc++.so");
+            if (entry == null) throw new IllegalStateException("libc++.so no incluida en APK");
+            try (InputStream input = apk.getInputStream(entry);
+                 FileOutputStream output = new FileOutputStream(target)) {
+                byte[] buffer = new byte[16384];
+                int n;
+                while ((n = input.read(buffer)) != -1) output.write(buffer, 0, n);
+                output.getFD().sync();
+            }
+        }
+        target.setReadable(true, true);
+        target.setExecutable(true, true);
+        return target;
     }
+
+    private static String shortError(Throwable throwable) {
+        Throwable x = throwable;
+        while (x.getCause() != null && x.getCause() != x) x = x.getCause();
+        return x.getClass().getSimpleName() +
+                (x.getMessage() == null ? "" : ": " + x.getMessage());
+    }
+
+    public static boolean isLoaded() { return loaded; }
+    public static String getLoadMessage() { return loadMessage; }
 
     public static native boolean openDev();
     public static native boolean closeDev();
