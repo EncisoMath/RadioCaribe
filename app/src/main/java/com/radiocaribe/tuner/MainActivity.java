@@ -139,10 +139,13 @@ public class MainActivity extends Activity {
     private final Runnable carouselScrollUnlockRunnable = () -> {
         suppressCarouselSelection = false;
         updateCarouselTransforms();
-        // If the user moved the carousel while an automatic centering animation
-        // was finishing, still commit the station nearest the visible center.
-        handler.removeCallbacks(carouselSnapRunnable);
-        handler.postDelayed(carouselSnapRunnable, 180L);
+        // A user can start a swipe while automated centering was in progress.
+        // Select only if the viewport actually landed on a different tile;
+        // do not repeatedly re-scroll the already selected station.
+        int nearest = findNearestStationIndex();
+        if (nearest >= 0 && nearest != stationIndex) {
+            selectStation(nearest, false);
+        }
     };
 
     private final Runnable carouselSnapRunnable = new Runnable() {
