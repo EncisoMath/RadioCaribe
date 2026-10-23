@@ -864,7 +864,9 @@ public class MainActivity extends Activity {
                 appendDiag(detail);
                 if (!ok) {
                     Toast.makeText(this,
-                            "FM interno no pudo iniciar. Pulsa NET para ver el punto exacto.",
+                            detail != null && (detail.contains("ROOT") || detail.contains("su:"))
+                                    ? "La FM necesita permiso root para RadioCaribe. Autorízalo en el teléfono."
+                                    : "FM interno no pudo iniciar. Pulsa NET para ver el punto exacto.",
                             Toast.LENGTH_LONG).show();
                 }
             });
