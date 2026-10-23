@@ -35,11 +35,15 @@ public final class InternalFmController {
         if (focusChange == AudioManager.AUDIOFOCUS_LOSS ||
                 focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
             try {
-                if (powered) FmNative.setMute(true);
+                if (powered) new Thread(() -> {
+                    try { FmBridgeClient.command(context, "MUTE 1"); } catch (Throwable ignored) { }
+                }, "FM-focus-mute").start();
             } catch (Throwable ignored) { }
         } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN) {
             try {
-                if (powered) FmNative.setMute(false);
+                if (powered) new Thread(() -> {
+                    try { FmBridgeClient.command(context, "MUTE 0"); } catch (Throwable ignored) { }
+                }, "FM-focus-unmute").start();
             } catch (Throwable ignored) { }
         }
     };
@@ -48,6 +52,7 @@ public final class InternalFmController {
         this.context = context.getApplicationContext();
         this.audioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         this.logger = logger;
+        FmBridgeClient.prepare(this.context);
     }
 
     public boolean isPowered() {
@@ -57,94 +62,57 @@ public final class InternalFmController {
     public void tune(final float frequency, final Callback callback) {
         new Thread(() -> {
             boolean ok = false;
-            String detail;
+            String result;
             try {
-                FmNative.load(context);
-                log("FM JNI: " + FmNative.getLoadMessage());
-                if (!FmNative.isLoaded()) {
-                    throw new IllegalStateException("libfmjni no disponible");
+                // Never load FM JNI in the untrusted app; SELinux denies /dev/radio0.
+                String response = FmBridgeClient.command(context, "TUNE " + frequency);
+                log("FM ROOT: " + response);
+                if (!response.startsWith("OK ")) {
+                    throw new IllegalStateException(response);
                 }
-
-                if (!deviceOpen) {
-                    log("FM: abriendo dispositivo");
-                    deviceOpen = FmNative.openDev();
-                    if (!deviceOpen) throw new IllegalStateException("openDev=false");
-                    log("FM: dispositivo abierto");
-                }
-
-                try {
-                    int antenna = FmNative.switchAntenna(0);
-                    log("FM: antena larga ret=" + antenna);
-                } catch (Throwable t) {
-                    log("FM: antena " + shortError(t));
-                }
-
+                powered = true;
+                deviceOpen = true;
                 requestFocus();
-
-                if (!powered) {
-                    log("FM: powerUp " + frequency);
-                    powered = FmNative.powerUp(frequency);
-                    if (!powered) throw new IllegalStateException("powerUp=false");
-                } else {
-                    log("FM: tune " + frequency);
-                    if (!FmNative.tune(frequency)) {
-                        throw new IllegalStateException("tune=false");
-                    }
-                }
-
-                try { FmNative.setMute(true); } catch (Throwable ignored) { }
-
-                boolean routeOk = createAudioPatchReflective();
-                if (routeOk) {
-                    log("FM AUDIO: patch FM→jack OK");
-                } else {
-                    log("FM AUDIO: tuner OK, patch no disponible");
-                }
-
-                try { FmNative.setRds(true); } catch (Throwable ignored) { }
-                try { FmNative.setMute(false); } catch (Throwable ignored) { }
-
                 ok = true;
-                detail = routeOk ? "FM 103.4 OK" : "FM 103.4 SINTONIZADO · AUDIO PENDIENTE";
-            } catch (Throwable t) {
-                detail = "FM ERROR: " + shortError(t);
-                log(detail);
-                stopInternal();
+                result = "FM " + frequency + " ROOT OK · "
+                        + (response.contains("audio=patched") ? "AUDIO OK" : "AUDIO PENDIENTE");
+                if (!response.contains("audio=patched")) log("FM AUDIO ROOT: " + response);
+            } catch (Throwable err) {
+                String error = shortError(err);
+                if (err instanceof java.net.ConnectException) {
+                    result = "FM ROOT no iniciado. Ejecuta RadioCaribe_FM_Iniciar_v0.14.cmd";
+                } else {
+                    result = "FM ROOT ERROR: " + error;
+                }
+                log(result);
+                powered = false;
+                deviceOpen = false;
             }
-
-            final boolean result = ok;
-            final String resultDetail = detail;
+            final boolean success = ok;
+            final String detail = result;
             if (callback != null) {
-                mainHandler.post(() -> callback.onResult(result, resultDetail));
+                mainHandler.post(() -> callback.onResult(success, detail));
             }
-        }, "RadioCaribe-FM").start();
+        }, "RadioCaribe-FM-bridge").start();
     }
 
     public void stopAsync() {
-        new Thread(this::stopInternal, "RadioCaribe-FM-stop").start();
+        new Thread(this::stopInternal, "RadioCaribe-FM-bridge-stop").start();
     }
 
     public void stop() {
-        stopInternal();
+        stopAsync();
     }
 
     private synchronized void stopInternal() {
-        try {
-            if (powered) {
-                try { FmNative.setMute(true); } catch (Throwable ignored) { }
-                try { FmNative.setRds(false); } catch (Throwable ignored) { }
-            }
-            releaseAudioPatchReflective();
-            if (powered) {
-                try { FmNative.powerDown(0); } catch (Throwable ignored) { }
-            }
-            powered = false;
-            if (deviceOpen) {
-                try { FmNative.closeDev(); } catch (Throwable ignored) { }
-            }
-            deviceOpen = false;
-            abandonFocus();
-        } catch (Throwable ignored) { }
+        if (powered) {
+            try { log("FM ROOT: " + FmBridgeClient.command(context, "STOP")); }
+            catch (Throwable err) { log("FM ROOT STOP: " + shortError(err)); }
+        }
+        powered = false;
+        deviceOpen = false;
+        releaseAudioPatchReflective();
+        abandonFocus();
     }
 
     private void requestFocus() {
