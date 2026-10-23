@@ -9,6 +9,10 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.util.Base64;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.util.UUID;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -82,6 +86,7 @@ public class MainActivity extends Activity {
     private static final int DARK_TEXT = Color.WHITE;
 
     private static class Station {
+        final String id;
         final String shortName;
         final String name;
         final String frequency;
@@ -89,6 +94,11 @@ public class MainActivity extends Activity {
         final String url;
 
         Station(String shortName, String name, String frequency, String source, String url) {
+            this(shortName, name, frequency, source, url, "");
+        }
+        Station(String shortName, String name, String frequency, String source, String url, String id) {
+            this.id = (id != null && id.matches("[a-zA-Z0-9-]{8,60}"))
+                    ? id : UUID.randomUUID().toString();
             this.shortName = shortName;
             this.name = name;
             this.frequency = frequency;
@@ -119,6 +129,7 @@ public class MainActivity extends Activity {
     // Android's LoudnessEnhancer limits/compresses peaks. FM remains untouched.
     private static final int STREAM_GAIN_MB = 600;
     private InternalFmController fmController;
+    private WebAdminServer webAdmin;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private int stationIndex = 0;
@@ -233,6 +244,15 @@ public class MainActivity extends Activity {
 
         markRecent(stations.get(stationIndex));
         rebuildGrid();
+        webAdmin = new WebAdminServer(this, handler, new WebAdminServer.Controller() {
+            @Override public JSONObject execute(String operation, JSONObject data) throws Exception {
+                return executeWebAdmin(operation, data);
+            }
+            @Override public File findLogo(String id) {
+                return id != null && id.matches("[a-zA-Z0-9-]{8,60}") ? logoFileForId(id) : null;
+            }
+        });
+        webAdmin.start();
         playCurrentStation(false);
     }
 
@@ -248,6 +268,7 @@ public class MainActivity extends Activity {
         handler.removeCallbacksAndMessages(null);
         try { unregisterReceiver(batteryReceiver); } catch (Exception ignored) { }
         try { unregisterReceiver(jackReceiver); } catch (Exception ignored) { }
+        if (webAdmin != null) webAdmin.stop();
         releasePlayer();
         releaseStreamingBooster();
         if (fmController != null) fmController.stop();
@@ -262,17 +283,20 @@ public class MainActivity extends Activity {
     private void loadStations() {
         stations.clear();
         String saved = prefs.getString(KEY_STATIONS, "");
+        boolean migratedIds = false;
         if (saved != null && !saved.isEmpty()) {
             try {
                 JSONArray arr = new JSONArray(saved);
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject o = arr.getJSONObject(i);
+                    if (!o.has("id")) migratedIds = true;
                     stations.add(new Station(
                             o.optString("short", "RC"),
                             o.optString("name", "RADIO"),
                             o.optString("frequency", "ONLINE"),
                             o.optString("source", "ONLINE"),
-                            o.optString("url", "")
+                            o.optString("url", ""),
+                            o.optString("id", "")
                     ));
                 }
             } catch (Exception ignored) {
@@ -281,6 +305,7 @@ public class MainActivity extends Activity {
         }
         if (stations.isEmpty()) addDefaultStations();
         ensureMacondo();
+        if (migratedIds) saveStations();
     }
 
     private void addDefaultStations() {
@@ -312,6 +337,7 @@ public class MainActivity extends Activity {
             JSONArray arr = new JSONArray();
             for (Station s : stations) {
                 JSONObject o = new JSONObject();
+                o.put("id", s.id);
                 o.put("short", s.shortName);
                 o.put("name", s.name);
                 o.put("frequency", s.frequency);
@@ -321,6 +347,127 @@ public class MainActivity extends Activity {
             }
             prefs.edit().putString(KEY_STATIONS, arr.toString()).apply();
         } catch (Exception ignored) { }
+    }
+
+    private File logoFileForId(String id) {
+        File dir = new File(getFilesDir(), "station_logos");
+        return new File(dir, id + ".jpg");
+    }
+
+    private File logoFileFor(Station s) {
+        File candidate = logoFileForId(s.id);
+        return candidate.isFile() ? candidate : null;
+    }
+
+    private JSONObject webResult() throws Exception { return new JSONObject().put("ok", true); }
+
+    private JSONObject webStations() throws Exception {
+        JSONArray all = new JSONArray();
+        for (Station s : stations) {
+            JSONObject row = new JSONObject();
+            row.put("id", s.id).put("name", s.name).put("short", s.shortName)
+                    .put("source", s.source).put("frequency", s.frequency).put("url", s.url)
+                    .put("logo", logoFileFor(s) != null);
+            all.put(row);
+        }
+        return webResult().put("stations", all);
+    }
+
+    private JSONObject executeWebAdmin(String operation, JSONObject json) throws Exception {
+        if ("list".equals(operation)) return webStations();
+        String id = json.optString("id", "");
+        int at = -1;
+        for (int i = 0; i < stations.size(); i++)
+            if (stations.get(i).id.equals(id)) { at = i; break; }
+
+        if ("save".equals(operation)) {
+            String name = json.optString("name", "").trim();
+            String freq = json.optString("frequency", "").trim();
+            String source = json.optString("source", "ONLINE");
+            String url = json.optString("url", "").trim();
+            if (name.isEmpty() || name.length() > 80 || url.length() > 1000 ||
+                    freq.length() > 45 || (!"FM".equals(source) && !"ONLINE".equals(source)) ||
+                    ("FM".equals(source) && !url.matches("fm://[0-9]{2,3}(\\\\.[0-9]{1,2})?")) ||
+                    ("ONLINE".equals(source) && !(url.startsWith("https://") || url.startsWith("http://")))) {
+                throw new IllegalArgumentException("Revisa nombre, tipo y URL");
+            }
+            String selectedId = stations.isEmpty() ? "" : stations.get(stationIndex).id;
+            Station existing = at >= 0 ? stations.get(at) : null;
+            Station updated = new Station(initialsFor(name), name,
+                    freq.isEmpty() ? source : freq, source, url,
+                    existing != null ? existing.id : "");
+            if (existing != null) stations.set(at, updated);
+            else stations.add(updated);
+            saveStations();
+            if (existing != null && selectedId.equals(updated.id)) {
+                renderStation();
+                rebuildGrid();
+                shouldPlay = true; playCurrentStation(false);
+            } else {
+                if (!selectedId.isEmpty()) {
+                    for (int i = 0; i < stations.size(); i++)
+                        if (selectedId.equals(stations.get(i).id)) { stationIndex = i; break; }
+                }
+                rebuildGrid();
+            }
+            return webResult().put("id", updated.id);
+        }
+        if (at < 0) throw new IllegalArgumentException("La emisora ya no existe");
+        if ("delete".equals(operation)) {
+            if (stations.size() <= 1) throw new IllegalArgumentException("Debe quedar una emisora");
+            boolean playing = at == stationIndex;
+            stations.remove(at);
+            File logo = logoFileForId(id);
+            if (logo.exists()) logo.delete();
+            if (at < stationIndex) stationIndex--;
+            if (stationIndex >= stations.size()) stationIndex = stations.size() - 1;
+            saveStations();
+            rebuildGrid();
+            renderStation();
+            if (playing) { shouldPlay = true; playCurrentStation(false); }
+            return webResult();
+        }
+        if ("move".equals(operation)) {
+            int delta = json.optInt("delta", 0), destination = at + delta;
+            if ((delta != -1 && delta != 1) || destination < 0 || destination >= stations.size())
+                throw new IllegalArgumentException("Movimiento no válido");
+            String selectedId = stations.get(stationIndex).id;
+            java.util.Collections.swap(stations, at, destination);
+            for (int i = 0; i < stations.size(); i++) {
+                if (stations.get(i).id.equals(selectedId)) { stationIndex = i; break; }
+            }
+            saveStations(); rebuildGrid(); renderStation();
+            return webResult();
+        }
+        if ("upload".equals(operation)) {
+            String raw = json.optString("image", "");
+            if (raw.isEmpty() || raw.length() > 950000)
+                throw new IllegalArgumentException("Imagen demasiado grande");
+            byte[] input = Base64.decode(raw, Base64.DEFAULT);
+            if (input.length > 700000) throw new IllegalArgumentException("Imagen demasiado grande");
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(input, 0, input.length, bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0 ||
+                    bounds.outWidth > 4000 || bounds.outHeight > 4000)
+                throw new IllegalArgumentException("Imagen inválida");
+            Bitmap bitmap = BitmapFactory.decodeByteArray(input, 0, input.length);
+            if (bitmap == null) throw new IllegalArgumentException("Imagen inválida");
+            File target = logoFileForId(id);
+            File folder = target.getParentFile();
+            if (!folder.isDirectory() && !folder.mkdirs())
+                throw new IllegalStateException("No se pudo crear carpeta de logos");
+            File tmp = new File(folder, id + ".tmp");
+            try (FileOutputStream output = new FileOutputStream(tmp)) {
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 85, output))
+                    throw new IllegalStateException("No se pudo procesar el logo");
+            } finally { bitmap.recycle(); }
+            if (target.exists() && !target.delete()) throw new IllegalStateException("No se pudo reemplazar el logo");
+            if (!tmp.renameTo(target)) throw new IllegalStateException("No se pudo guardar el logo");
+            rebuildGrid(); renderStation();
+            return webResult().put("id", id);
+        }
+        throw new IllegalArgumentException("Comando desconocido");
     }
 
     private void buildUi() {
@@ -600,10 +747,12 @@ public class MainActivity extends Activity {
             tile.setClipChildren(false);
 
             int logo = logoResFor(s);
-            if (logo != 0) {
+            File customLogo = logoFileFor(s);
+            if (customLogo != null || logo != 0) {
                 ImageView img = new ImageView(this);
                 img.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                img.setImageResource(logo);
+                if (customLogo != null) img.setImageBitmap(BitmapFactory.decodeFile(customLogo.getAbsolutePath()));
+                else img.setImageResource(logo);
                 tile.addView(img, new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
@@ -1319,6 +1468,12 @@ public class MainActivity extends Activity {
         TextView hint = makeText("RADIOCARIBE DEBUG / ADMIN", 18, Typeface.BOLD);
         hint.setPadding(0, 0, 0, dp(8));
         box.addView(hint);
+        String webUrl = webAdmin == null ? "" : webAdmin.getAddress();
+        TextView webHint = makeText(webUrl.isEmpty()
+                ? "PANEL WEB: conecta el Moto G3 al Wi-Fi y vuelve a abrir este menú."
+                : "PANEL WEB SIN PIN (MISMA RED WI-FI): " + webUrl, 14, Typeface.BOLD);
+        webHint.setPadding(0, dp(5), 0, dp(12));
+        box.addView(webHint);
 
         Station current = stations.get(stationIndex);
         EditText name = adminField("Nombre", current.name);
@@ -1378,7 +1533,8 @@ public class MainActivity extends Activity {
                     newName,
                     newFreq.isEmpty() ? source : newFreq,
                     source,
-                    newUrl));
+                    newUrl,
+                    current.id));
 
             saveStations();
             markRecent(stations.get(stationIndex));
