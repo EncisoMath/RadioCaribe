@@ -1,7 +1,5 @@
 package com.android.fmradio;
 
-import java.io.File;
-
 /**
  * Minimal JNI bridge compatible with the LineageOS FMRadio libfmjni ABI.
  * The native library registers methods against this exact class name.
@@ -11,35 +9,14 @@ public final class FmNative {
     private static String loadMessage = "not attempted";
 
     static {
-        Throwable first = null;
         try {
             System.loadLibrary("fmjni");
             loaded = true;
-            loadMessage = "System.loadLibrary(fmjni)";
+            loadMessage = "APK/lib/armeabi-v7a/libfmjni.so cargada";
         } catch (Throwable t) {
-            first = t;
-        }
-
-        if (!loaded) {
-            String[] paths = new String[] {
-                    "/system/lib/libfmjni.so",
-                    "/vendor/lib/libfmjni.so",
-                    "/system/vendor/lib/libfmjni.so"
-            };
-            for (String path : paths) {
-                try {
-                    if (!new File(path).exists()) continue;
-                    System.load(path);
-                    loaded = true;
-                    loadMessage = path;
-                    break;
-                } catch (Throwable ignored) { }
-            }
-        }
-
-        if (!loaded && first != null) {
-            loadMessage = first.getClass().getSimpleName() + ": " +
-                    String.valueOf(first.getMessage());
+            loaded = false;
+            loadMessage = t.getClass().getSimpleName() + ": " +
+                    String.valueOf(t.getMessage());
         }
     }
 
