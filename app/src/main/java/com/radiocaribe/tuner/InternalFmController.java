@@ -144,7 +144,19 @@ public final class InternalFmController {
     }
 
     public void stop() {
-        stopAsync();
+        // Only called when RadioCaribe's activity is destroyed.
+        // STOP during online station changes merely parks the FM hardware.
+        wantsFm = false;
+        commandGeneration.incrementAndGet();
+        new Thread(() -> {
+            try { FmBridgeClient.command(context, "STOP"); }
+            catch (Throwable ignored) { }
+            try { FmBridgeClient.command(context, "SHUTDOWN"); }
+            catch (Throwable ignored) { }
+            powered = false;
+            deviceOpen = false;
+            abandonFocus();
+        }, "RadioCaribe-FM-exit").start();
     }
 
     private synchronized void stopInternal() {
