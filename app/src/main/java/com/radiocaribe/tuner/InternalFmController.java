@@ -68,14 +68,21 @@ public final class InternalFmController {
             String detail = null;
             try {
                 String response = null;
-                for (int attempt = 0; attempt < 24; attempt++) {
+                for (int attempt = 0; attempt < 30; attempt++) {
                     if (generation != commandGeneration.get()) return;
                     try {
                         response = FmBridgeClient.command(context, "TUNE " + frequency);
                         break;
                     } catch (java.net.ConnectException notReady) {
-                        if (attempt == 0) log("FM ROOT: esperando a que inicie el servicio...");
-                        if (attempt == 23) throw notReady;
+                        if (attempt == 0) {
+                            log("FM ROOT: iniciando desde RadioCaribe (sin PC)...");
+                            boolean starting = FmBridgeAutostart.ensureStarting(context, this::log);
+                            if (!starting) {
+                                throw new IllegalStateException("No se puede iniciar su: " +
+                                        FmBridgeAutostart.getLastProblem());
+                            }
+                        }
+                        if (attempt == 29) throw notReady;
                         try { Thread.sleep(750L); }
                         catch (InterruptedException interrupted) {
                             Thread.currentThread().interrupt();
@@ -107,7 +114,8 @@ public final class InternalFmController {
                 if (generation != commandGeneration.get()) return;
                 String error = shortError(err);
                 if (err instanceof java.net.ConnectException) {
-                    detail = "FM ROOT no disponible. Inicia el servicio FM de RadioCaribe.";
+                    detail = "FM ROOT sin acceso. Autoriza root para RadioCaribe en el telefono "
+                            + "(no basta ADB root). " + FmBridgeAutostart.getLastProblem();
                 } else {
                     detail = "FM ROOT ERROR: " + error;
                 }
