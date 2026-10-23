@@ -990,6 +990,7 @@ public class MainActivity extends Activity {
     }
 
     private void appendDiag(String line) {
+        android.util.Log.i("RadioCaribeFM", line);
         if (diagnosticView == null) return;
         runOnUiThread(() -> {
             String current = diagnosticView.getText().toString();
