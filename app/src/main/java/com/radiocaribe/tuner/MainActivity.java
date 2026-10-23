@@ -16,6 +16,7 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
+import android.media.audiofx.LoudnessEnhancer;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.BatteryManager;
@@ -47,6 +48,7 @@ import com.google.android.exoplayer2.ExoPlayer;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
 import com.google.android.exoplayer2.Player;
+import com.google.android.exoplayer2.analytics.AnalyticsListener;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -98,6 +100,10 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private ExoPlayer player;
     private AudioManager audioManager;
+    private LoudnessEnhancer streamingBooster;
+    // 600 millibels = +6 dB target gain on the online audio session only.
+    // Android's LoudnessEnhancer limits/compresses peaks. FM remains untouched.
+    private static final int STREAM_GAIN_MB = 600;
     private InternalFmController fmController;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -195,6 +201,7 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        maximizeMediaVolume();
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         fmController = new InternalFmController(this, this::appendDiag);
 
@@ -214,6 +221,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        maximizeMediaVolume();
         enterImmersiveMode();
         if (wifiView != null) wifiView.invalidate();
     }
@@ -873,6 +881,41 @@ public class MainActivity extends Activity {
         playCurrentStation(false);
     }
 
+    private void maximizeMediaVolume() {
+        if (audioManager == null) return;
+        try {
+            final int maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            if (maximum > 0 && audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) < maximum) {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maximum, 0);
+            }
+        } catch (Exception e) {
+            android.util.Log.w("RadioCaribeAudio", "Media volume max failed", e);
+        }
+    }
+
+    private void releaseStreamingBooster() {
+        LoudnessEnhancer old = streamingBooster;
+        streamingBooster = null;
+        if (old != null) {
+            try { old.setEnabled(false); } catch (Exception ignored) { }
+            try { old.release(); } catch (Exception ignored) { }
+        }
+    }
+
+    private void enableStreamingBooster(int audioSessionId) {
+        releaseStreamingBooster();
+        if (audioSessionId <= 0) return;
+        try {
+            LoudnessEnhancer booster = new LoudnessEnhancer(audioSessionId);
+            booster.setTargetGain(STREAM_GAIN_MB);
+            booster.setEnabled(true);
+            streamingBooster = booster;
+            android.util.Log.i("RadioCaribeAudio", "Streaming booster active +" + (STREAM_GAIN_MB / 100f) + " dB session=" + audioSessionId);
+        } catch (Exception e) {
+            android.util.Log.w("RadioCaribeAudio", "Streaming booster unsupported; playback unchanged", e);
+        }
+    }
+
     private void playCurrentStation(boolean isRetry) {
         handler.removeCallbacks(retryRunnable);
         releasePlayer();
@@ -942,8 +985,14 @@ public class MainActivity extends Activity {
         appendDiag((isRetry ? "RETRY " : "OPEN  ") + station.name);
         updatePlayButton(true);
 
+        maximizeMediaVolume();
         ExoPlayer p = new ExoPlayer.Builder(this).build();
         player = p;
+        p.addAnalyticsListener(new AnalyticsListener() {
+            @Override public void onAudioSessionIdChanged(AnalyticsListener.EventTime eventTime, int audioSessionId) {
+                if (player == p) enableStreamingBooster(audioSessionId);
+            }
+        });
 
         p.addListener(new Player.Listener() {
             @Override public void onPlaybackStateChanged(int state) {
@@ -954,6 +1003,7 @@ public class MainActivity extends Activity {
                     updateSourcePill();
                     appendDiag("PLAYER buffer");
                 } else if (state == Player.STATE_READY) {
+                    maximizeMediaVolume();
                     preparing = false;
                     long elapsed = System.currentTimeMillis() - connectStartMs;
                     sourceView.setText(station.source);
@@ -993,6 +1043,7 @@ public class MainActivity extends Activity {
     }
 
     private void releasePlayer() {
+        releaseStreamingBooster();
         ExoPlayer old = player;
         player = null;
         preparing = false;
