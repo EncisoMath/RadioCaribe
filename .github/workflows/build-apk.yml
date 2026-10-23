@@ -2,7 +2,7 @@ name: Build RadioCaribe APK
 
 on:
   push:
-    branches: ["main", "fix/fm-privileged-bridge-v013"]
+    branches: ["main", "fix/fm-startup-v016"]
   workflow_dispatch:
 
 permissions:
@@ -53,11 +53,11 @@ jobs:
           unzip -l app/build/outputs/apk/release/app-release-unsigned.apk | grep "lib/armeabi-v7a/libfmjni.so"
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release-unsigned.apk RadioCaribe_v0.15_unsigned.apk
+        run: cp app/build/outputs/apk/release/app-release-unsigned.apk RadioCaribe_v0.16_unsigned.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadioCaribe-v0.15-UNSIGNED
-          path: RadioCaribe_v0.15_unsigned.apk
+          name: RadioCaribe-v0.16-UNSIGNED
+          path: RadioCaribe_v0.16_unsigned.apk
           if-no-files-found: error
