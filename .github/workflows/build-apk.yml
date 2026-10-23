@@ -46,18 +46,18 @@ jobs:
           gradle-version: "7.5.1"
 
       - name: Build installable debug APK
-        run: gradle :app:assembleDebug --stacktrace
+        run: gradle :app:assembleRelease --stacktrace
 
       - name: Verify bundled FM JNI
         run: |
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "lib/armeabi-v7a/libfmjni.so"
+          unzip -l app/build/outputs/apk/release/app-release-unsigned.apk | grep "lib/armeabi-v7a/libfmjni.so"
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk RadioCaribe_v0.11.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk RadioCaribe_v0.12_unsigned.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadioCaribe-v0.11-APK
-          path: RadioCaribe_v0.11.apk
+          name: RadioCaribe-v0.12-UNSIGNED
+          path: RadioCaribe_v0.12_unsigned.apk
           if-no-files-found: error
