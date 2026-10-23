@@ -10,8 +10,8 @@ android {
         applicationId 'com.radiocaribe.tuner'
         minSdk 23
         targetSdk 23
-        versionCode 19
-        versionName '0.19'
+        versionCode 21
+        versionName '0.21-rollback'
     }
 
     lint {
