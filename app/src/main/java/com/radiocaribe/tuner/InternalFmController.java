@@ -35,15 +35,11 @@ public final class InternalFmController {
         if (focusChange == AudioManager.AUDIOFOCUS_LOSS ||
                 focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
             try {
-                if (powered) new Thread(() -> {
-                    try { FmBridgeClient.command(context, "MUTE 1"); } catch (Throwable ignored) { }
-                }, "FM-focus-mute").start();
+                if (powered) muteRootFromFocus(true);
             } catch (Throwable ignored) { }
         } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN) {
             try {
-                if (powered) new Thread(() -> {
-                    try { FmBridgeClient.command(context, "MUTE 0"); } catch (Throwable ignored) { }
-                }, "FM-focus-unmute").start();
+                if (powered) muteRootFromFocus(false);
             } catch (Throwable ignored) { }
         }
     };
@@ -113,6 +109,13 @@ public final class InternalFmController {
         deviceOpen = false;
         releaseAudioPatchReflective();
         abandonFocus();
+    }
+
+    private void muteRootFromFocus(boolean mute) {
+        new Thread(() -> {
+            try { FmBridgeClient.command(context, mute ? "MUTE 1" : "MUTE 0"); }
+            catch (Throwable ignored) { }
+        }, "FM-focus-command").start();
     }
 
     private void requestFocus() {
