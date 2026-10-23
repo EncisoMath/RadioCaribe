@@ -30,6 +30,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -138,6 +139,10 @@ public class MainActivity extends Activity {
     private final Runnable carouselScrollUnlockRunnable = () -> {
         suppressCarouselSelection = false;
         updateCarouselTransforms();
+        // If the user moved the carousel while an automatic centering animation
+        // was finishing, still commit the station nearest the visible center.
+        handler.removeCallbacks(carouselSnapRunnable);
+        handler.postDelayed(carouselSnapRunnable, 180L);
     };
 
     private final Runnable carouselSnapRunnable = new Runnable() {
@@ -604,19 +609,37 @@ public class MainActivity extends Activity {
             gridRow.addView(tile, tileLp);
         }
 
-        gridScroll.post(() -> {
-            // One half-viewport of breathing room lets the first AND last
-            // tile be centered. Count the 5dp tile margin as part of width.
-            int sidePadding = Math.max(0, (gridScroll.getWidth() - dp(tileSize)) / 2 - dp(5));
-            gridRow.setPadding(sidePadding, 0, sidePadding, 0);
-            gridRow.requestLayout();
-            // Child geometry changes only after the layout pass.
-            gridScroll.post(() -> {
-                carouselPreviewIndex = stationIndex;
-                scrollToSelected(false);
+        // Recreating the activity used to restore scroll while tile positions
+        // were still zero. Wait for a real measured/layout pass instead of
+        // chaining post(), which is not a layout completion guarantee.
+        final int desiredStationIndex = stationIndex;
+        gridScroll.getViewTreeObserver().addOnPreDrawListener(
+                new ViewTreeObserver.OnPreDrawListener() {
+            @Override public boolean onPreDraw() {
+                if (gridScroll == null || gridRow == null ||
+                        gridScroll.getWidth() <= 0 ||
+                        gridRow.getChildCount() != stations.size()) return true;
+                int sidePadding = Math.max(0,
+                        (gridScroll.getWidth() - dp(tileSize)) / 2 - dp(5));
+                if (gridRow.getPaddingLeft() != sidePadding ||
+                        gridRow.getPaddingRight() != sidePadding) {
+                    gridRow.setPadding(sidePadding, 0, sidePadding, 0);
+                    // Await the next layout before relying on child positions.
+                    return true;
+                }
+                if (gridRow.getChildAt(0).getWidth() <= 0 ||
+                        gridRow.getChildAt(gridRow.getChildCount() - 1).getWidth() <= 0) {
+                    return true;
+                }
+                ViewTreeObserver observer = gridScroll.getViewTreeObserver();
+                if (observer.isAlive()) observer.removeOnPreDrawListener(this);
+                carouselPreviewIndex = desiredStationIndex;
+                scrollToIndex(desiredStationIndex, false);
                 updateCarouselTransforms();
-                handler.postDelayed(carouselScrollUnlockRunnable, 160L);
-            });
+                handler.removeCallbacks(carouselScrollUnlockRunnable);
+                handler.postDelayed(carouselScrollUnlockRunnable, 200L);
+                return true;
+            }
         });
     }
 
