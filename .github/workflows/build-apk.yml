@@ -2,7 +2,7 @@ name: Build RadioCaribe APK
 
 on:
   push:
-    branches: ["main", "fix/carousel-edge-select-v019", "feature/media-max-boost-v020", "fix/jack-audio-stable-v022"]
+    branches: ["main", "fix/carousel-edge-select-v019", "feature/media-max-boost-v020", "fix/jack-audio-stable-v022", "feature/web-admin-lan-v031"]
   workflow_dispatch:
 
 permissions:
@@ -53,11 +53,11 @@ jobs:
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "lib/armeabi-v7a/libfmjni.so"
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk RadioCaribe_v0.22_SIGNED.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk RadioCaribe_v0.31_WEB_SIGNED.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadioCaribe-v0.22-SIGNED
-          path: RadioCaribe_v0.22_SIGNED.apk
+          name: RadioCaribe-v0.31-WEB-SIGNED
+          path: RadioCaribe_v0.31_WEB_SIGNED.apk
           if-no-files-found: error
