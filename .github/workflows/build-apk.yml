@@ -2,7 +2,7 @@ name: Build RadioCaribe APK
 
 on:
   push:
-    branches: ["main", "fix/carousel-edge-select-v019"]
+    branches: ["main", "fix/carousel-edge-select-v019", "fix/rollback-audio-v021"]
   workflow_dispatch:
 
 permissions:
@@ -53,11 +53,11 @@ jobs:
           unzip -l app/build/outputs/apk/release/app-release-unsigned.apk | grep "lib/armeabi-v7a/libfmjni.so"
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release-unsigned.apk RadioCaribe_v0.19_unsigned.apk
+        run: cp app/build/outputs/apk/release/app-release-unsigned.apk RadioCaribe_v0.21_rollback_unsigned.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RadioCaribe-v0.19-UNSIGNED
-          path: RadioCaribe_v0.19_unsigned.apk
+          name: RadioCaribe-v0.21-ROLLBACK-UNSIGNED
+          path: RadioCaribe_v0.21_rollback_unsigned.apk
           if-no-files-found: error
