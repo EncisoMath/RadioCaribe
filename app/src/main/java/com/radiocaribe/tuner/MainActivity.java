@@ -133,6 +133,12 @@ public class MainActivity extends Activity {
     private boolean adminGestureLatched = false;
     private boolean suppressCarouselSelection = true;
     private int carouselPreviewIndex = -1;
+    // Smooth scrolling to a chosen tile must not trigger a second, accidental
+    // selection halfway through the animation (especially at both ends).
+    private final Runnable carouselScrollUnlockRunnable = () -> {
+        suppressCarouselSelection = false;
+        updateCarouselTransforms();
+    };
 
     private final Runnable carouselSnapRunnable = new Runnable() {
         @Override public void run() {
@@ -542,6 +548,7 @@ public class MainActivity extends Activity {
 
         suppressCarouselSelection = true;
         handler.removeCallbacks(carouselSnapRunnable);
+        handler.removeCallbacks(carouselScrollUnlockRunnable);
         gridRow.removeAllViews();
 
         final int tileSize = 138;
@@ -575,11 +582,10 @@ public class MainActivity extends Activity {
             }
 
             tile.setOnClickListener(v -> {
-                carouselPreviewIndex = sourceIndex;
-                previewStation(sourceIndex);
-                scrollToIndex(sourceIndex, true);
+                // The touched card is authoritative; don't guess its index
+                // from a later scroll position (which breaks edge stations).
                 handler.removeCallbacks(carouselSnapRunnable);
-                handler.postDelayed(carouselSnapRunnable, 220L);
+                selectStation(sourceIndex, true);
             });
 
             tile.setOnLongClickListener(v -> {
@@ -599,12 +605,18 @@ public class MainActivity extends Activity {
         }
 
         gridScroll.post(() -> {
-            int sidePadding = Math.max(0, gridScroll.getWidth() / 2 - dp(tileSize / 2f));
+            // One half-viewport of breathing room lets the first AND last
+            // tile be centered. Count the 5dp tile margin as part of width.
+            int sidePadding = Math.max(0, (gridScroll.getWidth() - dp(tileSize)) / 2 - dp(5));
             gridRow.setPadding(sidePadding, 0, sidePadding, 0);
-            carouselPreviewIndex = stationIndex;
-            scrollToSelected(false);
-            updateCarouselTransforms();
-            handler.postDelayed(() -> suppressCarouselSelection = false, 120L);
+            gridRow.requestLayout();
+            // Child geometry changes only after the layout pass.
+            gridScroll.post(() -> {
+                carouselPreviewIndex = stationIndex;
+                scrollToSelected(false);
+                updateCarouselTransforms();
+                handler.postDelayed(carouselScrollUnlockRunnable, 160L);
+            });
         });
     }
 
@@ -659,9 +671,18 @@ public class MainActivity extends Activity {
         if (target == null) return;
 
         int x = target.getLeft() + target.getWidth() / 2 - gridScroll.getWidth() / 2;
-        x = Math.max(0, x);
-        if (smooth) gridScroll.smoothScrollTo(x, 0);
-        else gridScroll.scrollTo(x, 0);
+        // Allow both end stations to reach the center without overscroll.
+        int maxX = Math.max(0, gridRow.getWidth() - gridScroll.getWidth());
+        x = Math.max(0, Math.min(x, maxX));
+        if (smooth) {
+            handler.removeCallbacks(carouselSnapRunnable);
+            handler.removeCallbacks(carouselScrollUnlockRunnable);
+            suppressCarouselSelection = true;
+            gridScroll.smoothScrollTo(x, 0);
+            handler.postDelayed(carouselScrollUnlockRunnable, 460L);
+        } else {
+            gridScroll.scrollTo(x, 0);
+        }
     }
 
     private int findNearestStationIndex() {
