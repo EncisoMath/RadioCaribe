@@ -387,7 +387,7 @@ public class MainActivity extends Activity {
             String url = json.optString("url", "").trim();
             if (name.isEmpty() || name.length() > 80 || url.length() > 1000 ||
                     freq.length() > 45 || (!"FM".equals(source) && !"ONLINE".equals(source)) ||
-                    ("FM".equals(source) && !url.matches("fm://[0-9]{2,3}(\\\\.[0-9]{1,2})?")) ||
+                    ("FM".equals(source) && !url.matches("fm://[0-9]{2,3}([.][0-9]{1,2})?")) ||
                     ("ONLINE".equals(source) && !(url.startsWith("https://") || url.startsWith("http://")))) {
                 throw new IllegalArgumentException("Revisa nombre, tipo y URL");
             }
