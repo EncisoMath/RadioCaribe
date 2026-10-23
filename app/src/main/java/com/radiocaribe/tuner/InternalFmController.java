@@ -59,6 +59,7 @@ public final class InternalFmController {
             boolean ok = false;
             String detail;
             try {
+                FmNative.load(context);
                 log("FM JNI: " + FmNative.getLoadMessage());
                 if (!FmNative.isLoaded()) {
                     throw new IllegalStateException("libfmjni no disponible");
