@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>RadioCaribe · Administración</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#080e19;color:#f3f7fd}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at top left,#143154 0%,#080e19 56%)}
+header{padding:28px max(22px,calc((100vw - 1130px)/2));border-bottom:1px solid #233653;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.logo{width:46px;height:46px;background:#ffcc33;border-radius:13px;display:grid;place-items:center;color:#101a2b;font-size:24px}
+h1{font-size:23px;margin:0}header small,.muted{color:#96a9bd}.pill{margin-left:auto;background:#163e3c;color:#a3f8ca;padding:7px 13px;border-radius:50px;font-size:12px}
+main{max-width:1160px;margin:auto;padding:28px 20px 60px;display:grid;grid-template-columns:minmax(300px,1.25fr) minmax(300px,1fr);gap:24px}
+.panel{background:#111d31;border:1px solid #28405f;border-radius:20px;overflow:hidden}
+.panel h2{font-size:17px;margin:0}.head{padding:20px 22px;border-bottom:1px solid #233958;display:flex;justify-content:space-between;gap:10px;align-items:center}
+.list{padding:13px;max-height:72vh;overflow:auto}.station{display:flex;align-items:center;gap:13px;padding:11px;border-radius:13px;border:1px solid transparent;margin-bottom:5px}
+.station:hover{background:#182a43}.station.active{background:#1e3652;border-color:#365c85}
+.avatar{height:60px;width:60px;object-fit:cover;background:#273b51;border-radius:11px;display:grid;place-items:center;flex-shrink:0;font-weight:800;color:#e1b63f}
+.detail{min-width:0;flex:1}.detail b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.detail span{font-size:12px;color:#9cb0c7}.mini{font-size:12px;padding:7px 10px;border-radius:9px;border:1px solid #486887;background:#172b44;color:white;cursor:pointer}
+.stack{display:flex;gap:6px;flex-wrap:wrap}.editor{padding:22px}.fields{display:grid;gap:15px}label{display:grid;gap:6px;font-weight:650;font-size:12px;color:#cbd8e7}
+input,select{border:1px solid #446183;background:#0b1729;color:#fff;border-radius:10px;padding:12px;font:inherit;width:100%;outline:none}
+input:focus,select:focus{border-color:#ffcf47}input[type=file]{padding:10px}.hint{font-size:11px;color:#91a8bd}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}button{font:inherit;font-weight:700;border:0;border-radius:11px;cursor:pointer;padding:11px 15px}
+.primary{color:#162238;background:#ffcf47}.secondary{color:#e0ebfb;background:#294466}.danger{color:#ffd5d5;background:#642d3a}
+.preview{display:flex;align-items:center;gap:12px}.preview img{height:76px;width:76px;object-fit:cover;border-radius:12px;background:#1f344f}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);max-width:94vw;background:#305a47;color:#eaffef;border:1px solid #63a47e;padding:13px 20px;border-radius:12px;display:none}
+footer{color:#7d97b2;font-size:12px;text-align:center;padding:15px}
+@media(max-width:780px){main{grid-template-columns:1fr}.list{max-height:42vh}header{padding:20px}h1{font-size:21px}.pill{margin-left:0}}
+</style>
+</head>
+<body>
+<header><div class="logo">♫</div><div><h1>RadioCaribe <span style="color:#ffcf47">Admin</span></h1>
+<small>Gestión inalámbrica de emisoras y logos · Red Wi-Fi local</small></div><span class="pill">● Sin PIN · Red local</span></header>
+<main>
+<section class="panel"><div class="head"><h2>Emisoras <span id="count" class="muted"></span></h2>
+<button class="primary" id="new">＋ Agregar</button></div><div class="list" id="list"><p class="muted">Cargando...</p></div></section>
+<section class="panel"><div class="head"><h2 id="formTitle">Editar emisora</h2><span id="selectedType" class="muted">—</span></div>
+<div class="editor">
+<div class="preview"><img id="preview" alt="Logo" style="display:none"/><div id="placeholder" class="avatar">RC</div>
+<div><b id="previewName">Selecciona una emisora</b><div class="hint">Imagen cuadrada · Se guarda en el Moto G3</div></div></div>
+<form id="form" class="fields" style="margin-top:20px">
+<input type="hidden" id="id"/>
+<label>Nombre de la emisora<input id="name" maxlength="80" required placeholder="Ej. Radio Caribe"/></label>
+<label>Frecuencia o subtítulo<input id="frequency" maxlength="45" placeholder="Ej. 103.4 FM"/></label>
+<label>Tipo de emisora<select id="source"><option value="ONLINE">En Internet</option><option value="FM">FM física</option></select></label>
+<label>Enlace de streaming o frecuencia FM<input id="url" maxlength="1000" required placeholder="https://... / fm://103.4"/></label>
+<div class="hint">Para radio física usa <code>fm://103.4</code>. Para Internet usa una URL directa de audio.</div>
+<label>Logo (JPG, PNG, WebP)<input type="file" id="image" accept="image/png,image/jpeg,image/webp"/></label>
+<div class="hint">La imagen se optimiza automáticamente a JPG cuadrado y se guarda en el dispositivo. No debes recompilar la APK.</div>
+<div class="actions"><button type="submit" class="primary" id="save">Guardar cambios</button><button type="button" class="secondary" id="clear">Nuevo</button><button type="button" class="danger" id="remove">Eliminar</button></div>
+</form>
+</div></section>
+</main><footer>Los cambios se sincronizan con la pantalla de RadioCaribe. Cualquier dispositivo conectado a este Wi-Fi puede administrar las emisoras.</footer><div id="toast"></div>
+<script>
+"use strict";
+let items=[], selected=null;
+const $=id=>document.getElementById(id);
+function alertUser(message,bad=false){const x=$("toast");x.textContent=message;x.style.display="block";x.style.background=bad?"#712e36":"#305a47";clearTimeout(window._toastTimer);window._toastTimer=setTimeout(()=>x.style.display="none",4000);}
+async function request(path, data){
+ const opts=data===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json","X-RadioCaribe-Admin":"1"},body:JSON.stringify(data)};
+ const r=await fetch(path,opts), j=await r.json();
+ if(!r.ok || j.ok===false) throw Error(j.error||"Error de conexión");
+ return j;
+}
+function element(tag,cls,content){const x=document.createElement(tag);if(cls)x.className=cls;if(content!==undefined)x.textContent=content;return x;}
+function initials(s){return (s||"RC").split(/\s+/).slice(0,2).map(x=>x.charAt(0)).join("").toUpperCase();}
+function photo(id){return "/api/logo/"+encodeURIComponent(id)+"?t="+Date.now();}
+function showRecord(s){
+ selected=s?s.id:null;$("id").value=selected||"";$("name").value=s?s.name:"";$("frequency").value=s?s.frequency:"";
+ $("source").value=s?s.source:"ONLINE";$("url").value=s?s.url:"";$("image").value="";
+ $("formTitle").textContent=s?"Editar emisora":"Nueva emisora";$("selectedType").textContent=s?s.source:"Nueva";
+ $("previewName").textContent=s?s.name:"Nueva emisora";$("placeholder").textContent=initials(s?s.name:"RC");
+ $("remove").style.display=s?"":"none";const img=$("preview");img.style.display=s&&s.logo?"":"none";$("placeholder").style.display=s&&s.logo?"none":"";
+ if(s&&s.logo){img.src=photo(s.id);img.onerror=()=>{img.style.display="none";$("placeholder").style.display="grid";};}
+ [...document.querySelectorAll(".station")].forEach(x=>x.classList.toggle("active",x.dataset.id===selected));
+}
+function render(){
+ const list=$("list");list.textContent="";$("count").textContent="("+items.length+")";
+ for(let index=0;index<items.length;index++){
+  const s=items[index], row=element("div","station");row.dataset.id=s.id;
+  let icon;
+  if(s.logo){icon=element("img","avatar");icon.src=photo(s.id);icon.onerror=()=>{icon.replaceWith(element("div","avatar",initials(s.name)));};}
+  else icon=element("div","avatar",initials(s.name));
+  const detail=element("div","detail"), name=element("b","",s.name), sub=element("span","",s.frequency+" · "+s.source);
+  detail.append(name,sub);const tools=element("div","stack");
+  for(const [symbol,delta,title] of [["↑",-1,"Subir"],["↓",1,"Bajar"]]){
+   const b=element("button","mini",symbol);b.title=title;b.disabled=(index+delta<0||index+delta>=items.length);
+   b.addEventListener("click",async(e)=>{e.stopPropagation();try{await request("/api/stations/move",{id:s.id,delta});await reload(s.id);}catch(err){alertUser(err.message,true);}});
+   tools.append(b);
+  }
+  row.append(icon,detail,tools);row.addEventListener("click",()=>showRecord(s));list.append(row);
+ }
+ if(selected){const x=items.find(a=>a.id===selected);if(x)showRecord(x);else showRecord(items[0]||null);}
+ else showRecord(items[0]||null);
+}
+async function reload(pick){const j=await request("/api/stations");items=j.stations||[];if(pick)selected=pick;render();}
+async function processImage(file){
+ if(!file)return null;
+ if(file.size>9000000)throw Error("Imagen demasiado grande (máx. 9 MB).");
+ const bitmap=await createImageBitmap(file);
+ const canvas=document.createElement("canvas");canvas.width=512;canvas.height=512;const ctx=canvas.getContext("2d");
+ const scale=Math.max(512/bitmap.width,512/bitmap.height),w=bitmap.width*scale,h=bitmap.height*scale;
+ ctx.fillStyle="#101d30";ctx.fillRect(0,0,512,512);ctx.drawImage(bitmap,(512-w)/2,(512-h)/2,w,h);
+ if(bitmap.close)bitmap.close();
+ return canvas.toDataURL("image/jpeg",0.83).split(",")[1];
+}
+$("form").addEventListener("submit",async e=>{
+ e.preventDefault();$("save").disabled=true;
+ try{
+  const item={id:$("id").value||"",name:$("name").value.trim(),frequency:$("frequency").value.trim(),source:$("source").value,url:$("url").value.trim()};
+  const saved=await request("/api/stations/save",item);
+  const file=$("image").files[0];
+  if(file){const data=await processImage(file);await request("/api/logo/upload",{id:saved.id,image:data});}
+  await reload(saved.id);alertUser("Emisora y logo guardados en RadioCaribe.");
+ }catch(err){alertUser(err.message,true);}finally{$("save").disabled=false;}
+});
+$("remove").onclick=async()=>{if(!selected)return;if(!confirm("¿Eliminar esta emisora?"))return;
+ try{await request("/api/stations/delete",{id:selected});selected=null;await reload();alertUser("Emisora eliminada.");}catch(err){alertUser(err.message,true);}};
+$("new").onclick=$("clear").onclick=()=>{showRecord(null);$("name").focus();};
+$("image").onchange=e=>{const f=e.target.files[0];if(!f)return;const p=$("preview");p.src=URL.createObjectURL(f);p.style.display="";$("placeholder").style.display="none";};
+reload().catch(err=>alertUser("No se pudo conectar al Moto G3: "+err.message,true));
+</script>
+</body></html>
