@@ -16,6 +16,7 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
+import android.media.AudioDeviceInfo;
 import android.media.audiofx.LoudnessEnhancer;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
@@ -101,6 +102,19 @@ public class MainActivity extends Activity {
     private ExoPlayer player;
     private AudioManager audioManager;
     private LoudnessEnhancer streamingBooster;
+    private int persistentStreamSession = -1;
+    private final Runnable jackVolumeRetry = () -> {
+        maximizeMediaVolume();
+        updateBoosterForJack();
+    };
+    private final BroadcastReceiver jackReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            handler.removeCallbacks(jackVolumeRetry);
+            jackVolumeRetry.run();
+            handler.postDelayed(jackVolumeRetry, 300L);
+            handler.postDelayed(jackVolumeRetry, 1000L);
+        }
+    };
     // 600 millibels = +6 dB target gain on the online audio session only.
     // Android's LoudnessEnhancer limits/compresses peaks. FM remains untouched.
     private static final int STREAM_GAIN_MB = 600;
@@ -201,7 +215,10 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        registerReceiver(jackReceiver, new IntentFilter(Intent.ACTION_HEADSET_PLUG));
         maximizeMediaVolume();
+        handler.postDelayed(jackVolumeRetry, 400L);
+        handler.postDelayed(jackVolumeRetry, 1400L);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         fmController = new InternalFmController(this, this::appendDiag);
 
@@ -222,6 +239,7 @@ public class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         maximizeMediaVolume();
+        updateBoosterForJack();
         enterImmersiveMode();
         if (wifiView != null) wifiView.invalidate();
     }
@@ -229,7 +247,9 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
         try { unregisterReceiver(batteryReceiver); } catch (Exception ignored) { }
+        try { unregisterReceiver(jackReceiver); } catch (Exception ignored) { }
         releasePlayer();
+        releaseStreamingBooster();
         if (fmController != null) fmController.stop();
         super.onDestroy();
     }
@@ -881,15 +901,31 @@ public class MainActivity extends Activity {
         playCurrentStation(false);
     }
 
-    private void maximizeMediaVolume() {
-        if (audioManager == null) return;
+    private boolean isJackPresent() {
+        if (audioManager == null) return false;
         try {
-            final int maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            for (AudioDeviceInfo d : audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                int type = d.getType();
+                if (type == AudioDeviceInfo.TYPE_WIRED_HEADSET
+                        || type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+                        || type == AudioDeviceInfo.TYPE_LINE_ANALOG) return true;
+            }
+        } catch (Exception ignored) { }
+        return false;
+    }
+
+    private void maximizeMediaVolume() {
+        if (audioManager == null || !isJackPresent()) return;
+        try {
+            int maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
             if (maximum > 0 && audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) < maximum) {
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maximum, 0);
             }
+            android.util.Log.i("RadioCaribeAudio", "jack=YES media="
+                    + audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                    + "/" + maximum);
         } catch (Exception e) {
-            android.util.Log.w("RadioCaribeAudio", "Media volume max failed", e);
+            android.util.Log.w("RadioCaribeAudio", "Jack media volume max failed", e);
         }
     }
 
@@ -902,17 +938,35 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void enableStreamingBooster(int audioSessionId) {
-        releaseStreamingBooster();
-        if (audioSessionId <= 0) return;
+    private void updateBoosterForJack() {
+        if (streamingBooster == null) return;
         try {
-            LoudnessEnhancer booster = new LoudnessEnhancer(audioSessionId);
-            booster.setTargetGain(STREAM_GAIN_MB);
-            booster.setEnabled(true);
-            streamingBooster = booster;
-            android.util.Log.i("RadioCaribeAudio", "Streaming booster active +" + (STREAM_GAIN_MB / 100f) + " dB session=" + audioSessionId);
+            boolean jack = isJackPresent();
+            streamingBooster.setEnabled(jack);
+            android.util.Log.i("RadioCaribeAudio", "booster enabled=" + jack
+                    + " session=" + persistentStreamSession);
         } catch (Exception e) {
-            android.util.Log.w("RadioCaribeAudio", "Streaming booster unsupported; playback unchanged", e);
+            android.util.Log.w("RadioCaribeAudio", "Could not update jack booster", e);
+        }
+    }
+
+    private void ensureStreamingBooster(int sessionId) {
+        if (sessionId <= 0) return;
+        if (streamingBooster != null && persistentStreamSession == sessionId) {
+            updateBoosterForJack();
+            return;
+        }
+        releaseStreamingBooster();
+        persistentStreamSession = sessionId;
+        try {
+            LoudnessEnhancer booster = new LoudnessEnhancer(sessionId);
+            booster.setTargetGain(STREAM_GAIN_MB);
+            streamingBooster = booster;
+            updateBoosterForJack();
+            android.util.Log.i("RadioCaribeAudio", "session-fixed +" + (STREAM_GAIN_MB / 100f)
+                    + "dB session=" + sessionId);
+        } catch (Exception e) {
+            android.util.Log.w("RadioCaribeAudio", "LoudnessEnhancer unsupported: no boost", e);
         }
     }
 
@@ -988,9 +1042,18 @@ public class MainActivity extends Activity {
         maximizeMediaVolume();
         ExoPlayer p = new ExoPlayer.Builder(this).build();
         player = p;
+        // Reuse the SAME AudioTrack session across station changes, instead of
+        // releasing/recreating the DSP and causing a loudness drop every time.
+        if (persistentStreamSession <= 0 && audioManager != null) {
+            persistentStreamSession = audioManager.generateAudioSessionId();
+        }
+        if (persistentStreamSession > 0) {
+            p.setAudioSessionId(persistentStreamSession);
+            ensureStreamingBooster(persistentStreamSession);
+        }
         p.addAnalyticsListener(new AnalyticsListener() {
             @Override public void onAudioSessionIdChanged(AnalyticsListener.EventTime eventTime, int audioSessionId) {
-                if (player == p) enableStreamingBooster(audioSessionId);
+                if (player == p && audioSessionId > 0) ensureStreamingBooster(audioSessionId);
             }
         });
 
@@ -1043,7 +1106,8 @@ public class MainActivity extends Activity {
     }
 
     private void releasePlayer() {
-        releaseStreamingBooster();
+        // DSP is deliberately NOT released here: the next online station
+        // gets the exact same session and gain immediately.
         ExoPlayer old = player;
         player = null;
         preparing = false;
