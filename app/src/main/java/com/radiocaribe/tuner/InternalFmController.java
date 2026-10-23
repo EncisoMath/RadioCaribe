@@ -11,6 +11,7 @@ import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class InternalFmController {
 
@@ -30,6 +31,10 @@ public final class InternalFmController {
     private volatile boolean deviceOpen = false;
     private volatile boolean powered = false;
     private volatile Object audioPatch = null;
+    // A startup FM request may arrive before the ADB-root service is listening.
+    // Each station change invalidates outstanding startup retries.
+    private final AtomicInteger commandGeneration = new AtomicInteger();
+    private volatile boolean wantsFm = false;
 
     private final AudioManager.OnAudioFocusChangeListener focusListener = focusChange -> {
         if (focusChange == AudioManager.AUDIOFOCUS_LOSS ||
@@ -56,43 +61,77 @@ public final class InternalFmController {
     }
 
     public void tune(final float frequency, final Callback callback) {
+        wantsFm = true;
+        final int generation = commandGeneration.incrementAndGet();
         new Thread(() -> {
             boolean ok = false;
-            String result;
+            String detail = null;
             try {
-                // Never load FM JNI in the untrusted app; SELinux denies /dev/radio0.
-                String response = FmBridgeClient.command(context, "TUNE " + frequency);
+                String response = null;
+                for (int attempt = 0; attempt < 24; attempt++) {
+                    if (generation != commandGeneration.get()) return;
+                    try {
+                        response = FmBridgeClient.command(context, "TUNE " + frequency);
+                        break;
+                    } catch (java.net.ConnectException notReady) {
+                        if (attempt == 0) log("FM ROOT: esperando a que inicie el servicio...");
+                        if (attempt == 23) throw notReady;
+                        try { Thread.sleep(750L); }
+                        catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                }
+
+                // Switching to online or choosing a new station invalidates old FM work.
+                if (generation != commandGeneration.get()) {
+                    if (!wantsFm) {
+                        try { FmBridgeClient.command(context, "STOP"); }
+                        catch (Throwable ignored) {}
+                    }
+                    return;
+                }
                 log("FM ROOT: " + response);
-                if (!response.startsWith("OK ")) {
-                    throw new IllegalStateException(response);
+                if (response == null || !response.startsWith("OK ")) {
+                    throw new IllegalStateException(String.valueOf(response));
                 }
                 powered = true;
                 deviceOpen = true;
                 requestFocus();
                 ok = true;
-                result = "FM " + frequency + " ROOT OK · "
+                detail = "FM " + frequency + " ROOT OK · "
                         + (response.contains("audio=patched") ? "AUDIO OK" : "AUDIO PENDIENTE");
                 if (!response.contains("audio=patched")) log("FM AUDIO ROOT: " + response);
             } catch (Throwable err) {
+                if (generation != commandGeneration.get()) return;
                 String error = shortError(err);
                 if (err instanceof java.net.ConnectException) {
-                    result = "FM ROOT no iniciado. Ejecuta RadioCaribe_FM_Iniciar_v0.14.cmd";
+                    detail = "FM ROOT no disponible. Inicia el servicio FM de RadioCaribe.";
                 } else {
-                    result = "FM ROOT ERROR: " + error;
+                    detail = "FM ROOT ERROR: " + error;
                 }
-                log(result);
+                log(detail);
                 powered = false;
                 deviceOpen = false;
             }
+
+            if (generation != commandGeneration.get()) return;
             final boolean success = ok;
-            final String detail = result;
+            final String result = detail;
             if (callback != null) {
-                mainHandler.post(() -> callback.onResult(success, detail));
+                mainHandler.post(() -> {
+                    if (generation == commandGeneration.get()) {
+                        callback.onResult(success, result);
+                    }
+                });
             }
-        }, "RadioCaribe-FM-bridge").start();
+        }, "RadioCaribe-FM-startup").start();
     }
 
     public void stopAsync() {
+        wantsFm = false;
+        commandGeneration.incrementAndGet();
         new Thread(this::stopInternal, "RadioCaribe-FM-bridge-stop").start();
     }
 
