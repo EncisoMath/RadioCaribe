@@ -871,7 +871,8 @@ public class MainActivity extends Activity {
             return;
         }
 
-        if (fmController != null && fmController.isPowered()) {
+        // Also cancel FM connection retries if the root service was still starting.
+        if (fmController != null) {
             fmController.stopAsync();
         }
 
