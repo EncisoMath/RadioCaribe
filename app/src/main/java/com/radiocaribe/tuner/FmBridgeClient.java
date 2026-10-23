@@ -48,7 +48,7 @@ public final class FmBridgeClient {
         }
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), PORT), 1500);
-            socket.setSoTimeout(4000);
+            socket.setSoTimeout(11000);
             PrintWriter output = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), "UTF-8"), true);
             BufferedReader input = new BufferedReader(new InputStreamReader(socket.getInputStream(), "UTF-8"));
             output.println(new String(secret, "US-ASCII") + " " + cmd);
