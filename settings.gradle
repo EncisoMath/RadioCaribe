@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = 'RadioCaribe'
-include ':app'
+include ':app', ':booster'
