@@ -1,4 +1,4 @@
-# RadioCaribe v0.35
+# RadioCaribe v0.36
 
 Reproductor dedicado para el **Moto G3 con LineageOS 16 / Android 9**, con emisoras online y FM física.
 
@@ -8,9 +8,20 @@ Reproductor dedicado para el **Moto G3 con LineageOS 16 / Android 9**, con emiso
 - Aplica **+10 dB** con `LoudnessEnhancer` a las emisoras por Internet en todas las salidas.
 - ExoPlayer se encarga de la prioridad de audio y la reconexión de streams.
 
-La FM física sigue usando el controlador root y la ruta de audio originales; no recibe el aumento de +10 dB.
+### Ecualizador de 12 bandas y amplificador (v0.36)
 
-## FM física (v0.35)
+Pulsa el **icono EQ (☷) inmediatamente a la derecha de NET**. Se abre una ventana horizontal con 12 faders reales a 32, 64, 125, 250, 500 Hz; 1, 2, 3, 4, 6, 10 y 16 kHz.
+
+- Cada banda ajusta **−12 a +12 dB** mediante un filtro digital peaking biquad.
+- Amplificador **0 a +25 dB**, valor inicial **+10 dB**, configurable en tiempo real.
+- Los parámetros se **guardan automáticamente**, incluso entre reinicios; RESTABLECER pone las bandas en cero y el amplificador en +10 dB.
+- El sonido online pasa por ExoPlayer → procesador PCM de 12 bandas → amplificador → limitador suave → salida Android. Se deshabilita offload y coma flotante para que los filtros no se omitan.
+- **Sin doble amplificación**: el +10 dB fijo de LoudnessEnhancer fue sustituido por este ajuste de 0 a +25 dB.
+- **Límite físico:** +25 dB puede saturar la señal de una emisora que ya transmite fuerte. El limitador evita desbordamiento de muestras, pero no garantiza ausencia de distorsión ni seguridad del altavoz.
+
+**La FM física sigue usando el puente root y la ruta de audio hardware original: la señal FM no pasa por ExoPlayer PCM, así que el EQ y la ganancia configurables se aplican a las emisoras ONLINE, no a la FM física.**
+
+## FM física (v0.36)
 
 Se corrigió el error de v0.34 que exigía `libc++.so` dentro del APK, aunque Android 9 la proporciona como biblioteca del sistema. El puente root ahora emplea `/system/lib/libc++.so`, `/vendor/lib/libc++.so` o una copia previamente instalada en el puente, e informa de una causa concreta cuando falta una dependencia.
 
@@ -27,7 +38,7 @@ El UID `10104` es el del Moto G3 del propietario en esta instalación; siempre v
 
 **Nota Android:** cada salida conserva su propio volumen. Las APIs públicas ajustan la ruta **activa**; RadioCaribe fijará automáticamente el máximo en cualquier nueva ruta cuando se conecte, pero no modifica simultáneamente índices de salidas desconectadas.
 
-## Reposo profundo opcional por USB (v0.35, experimental)
+## Reposo profundo opcional por USB (v0.36, experimental)
 
 **Apagado por defecto**, para no dejar el Moto G3 sin ADB Wi-Fi antes de probar el despertar con USB. Actívalo desde CMD cuando el teléfono esté encendido y conectado a la red:
 
@@ -85,6 +96,6 @@ Los scripts Magisk v3 que ajustan volumen 25/25 y ADB TCP 5555 **no necesitan se
 ## Administración y APK
 - Interfaz de radio horizontal, temas claro/oscuro y última emisora recordada.
 - Editor de emisoras y logos por Wi-Fi en el puerto 8080. **Sin PIN:** utilizar solo en redes de confianza.
-- [APK publicado en GitHub Releases](https://github.com/EncisoMath/RadioCaribe/releases/latest): `RadioCaribe_v0.35.apk`.
+- [APK publicado en GitHub Releases](https://github.com/EncisoMath/RadioCaribe/releases/latest): `RadioCaribe_v0.36.apk`.
 - Para actualizar sin desinstalar, el certificado de firma del nuevo APK debe coincidir con el anterior. El workflow intenta reutilizar la misma clave en caché.
 - **Rama única:** `main`. Compilación con GitHub Actions, Android SDK 33 y Gradle 7.5.1.
