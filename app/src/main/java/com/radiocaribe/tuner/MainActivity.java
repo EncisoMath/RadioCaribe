@@ -309,7 +309,7 @@ public class MainActivity extends Activity {
         webAdmin.start();
         if (UltraSleep.enabled(this) && !UltraSleep.powered(this)) {
             // New process started off USB: do not start Wi-Fi or FM just to sleep.
-            shouldPlay = false;
+            // Preserve playback intention for resumption after USB reconnect.
             handler.postDelayed(ultraSleepRequest, 1500L);
         } else {
             playCurrentStation(false);
