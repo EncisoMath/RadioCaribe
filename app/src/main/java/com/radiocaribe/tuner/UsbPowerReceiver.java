@@ -14,7 +14,8 @@ public final class UsbPowerReceiver extends BroadcastReceiver {
         if (!Intent.ACTION_POWER_CONNECTED.equals(intent.getAction())) return;
         if (!UltraSleep.enabled(context)) return;
         Log.i("RadioCaribeSleep", "Power connected (manifest receiver)");
-        UltraSleep.restore(context);
+        // Visual wake must happen BEFORE potentially slow Wi-Fi and Bluetooth
+        // stack initialization; MainActivity will also restore audio.
         UltraSleep.wakeScreen(context);
         try {
             Intent launch = new Intent(context, MainActivity.class);
@@ -24,5 +25,6 @@ public final class UsbPowerReceiver extends BroadcastReceiver {
         } catch (Exception error) {
             Log.e("RadioCaribeSleep", "Could not open RadioCaribe on USB power", error);
         }
+        UltraSleep.restore(context); // Fallback if Activity launch is delayed.
     }
 }
