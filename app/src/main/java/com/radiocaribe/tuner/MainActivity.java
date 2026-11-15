@@ -84,6 +84,22 @@ public class MainActivity extends Activity {
     private static final String KEY_DARK = "dark_theme";
     private static final String KEY_STATIONS = "station_list_v2";
     private static final String KEY_RECENTS = "recent_urls_v1";
+
+    // Official Radio Tiempo streams; keep these distinct from user-defined stations.
+    // Clásicos' RT_CLASICA_SC endpoint was personally verified by the owner.
+    private static final String RT_HOST =
+            "https://playerservices.streamtheworld.com/api/livestream-redirect/";
+    // Each entry: title shown on the radio, dial, stable stream key, endpoint.
+    private static final String[][] RADIO_TIEMPO_STATIONS = {
+            {"BARRANQUILLA", "96.1 FM", "RT_BARRANQUILLA", "RT_BARRANQUILLAAAC.aac"},
+            {"CALI", "89.5 FM", "RT_CALI", "RT_CALIAAC_SC"},
+            {"MEDELLÍN", "105.9 FM", "RT_MEDELLIN", "RT_MEDELLINAAC.aac"},
+            {"CARTAGENA", "88.5 FM", "RT_CARTAGENA", "RT_CARTAGENAAAC.aac"},
+            {"MONTERÍA", "104.5 FM", "RT_MONTERIA", "RT_MONTERIAAAC.aac"},
+            {"SINCELEJO", "97.3 FM", "RT_SINCELEJO", "RT_SINCELEJOAAC.aac"},
+            {"CLASICOS", "ONLINE", "RT_CLASICA", "RT_CLASICA_SC"}
+    };
+
     private static final String KEY_EQ_GAIN = "equalizer_gain_db_v1";
     private static final String KEY_EQ_BAND = "equalizer_band_db_v1_";
 
@@ -477,13 +493,88 @@ public class MainActivity extends Activity {
         }
         if (stations.isEmpty()) addDefaultStations();
         ensureMacondo();
+        ensureRadioTiempoStations();
         if (migratedIds) saveStations();
+    }
+
+    /**
+     * Migrate existing installed stations WITHOUT clearing preferences or logos.
+     * Preserves IDs, personalized stations and the currently selected station.
+     * This runs after loading the saved list, since many devices never call
+     * addDefaultStations() again after the very first installation.
+     */
+    private void ensureRadioTiempoStations() {
+        int selected = prefs.getInt(KEY_INDEX, 0);
+        String selectedId = selected >= 0 && selected < stations.size()
+                ? stations.get(selected).id : null;
+        boolean changed = false;
+        int insertionIndex = -1;
+
+        for (int row = 0; row < RADIO_TIEMPO_STATIONS.length; row++) {
+            String[] station = RADIO_TIEMPO_STATIONS[row];
+            String title = station[0];
+            String dial = station[1];
+            String key = station[2];
+            String url = RT_HOST + station[3];
+
+            int found = -1;
+            for (int i = 0; i < stations.size(); i++) {
+                Station existing = stations.get(i);
+                String existingUrl = existing.url == null ? "" :
+                        existing.url.toUpperCase(Locale.ROOT);
+                String existingName = existing.name == null ? "" :
+                        existing.name.toUpperCase(Locale.ROOT);
+                // Match either the original Radio Tiempo stream family or the
+                // old full-name labels, without touching unrelated stations.
+                if (existingUrl.contains(key) ||
+                        existingName.equals("RADIO TIEMPO " + title) ||
+                        ("CLASICOS".equals(title)
+                                && (existingName.equals("RADIO TIEMPO CLÁSICOS")
+                                    || existingName.equals("RADIO TIEMPO CLASICOS")))) {
+                    found = i;
+                    break;
+                }
+            }
+
+            if (found >= 0) {
+                Station previous = stations.get(found);
+                if (!title.equals(previous.name) || !dial.equals(previous.frequency)
+                        || !url.equals(previous.url) || !"ONLINE".equals(previous.source)) {
+                    // Keep the old ID: custom artwork and references use this ID.
+                    stations.set(found, new Station("RT", title, dial, "ONLINE",
+                            url, previous.id));
+                    changed = true;
+                }
+                if (row == 0) insertionIndex = found + 1;
+            } else {
+                // Add the new options immediately after Barranquilla.
+                // Existing non-Radio-Tiempo stations retain their order.
+                int at = insertionIndex >= 0
+                        ? Math.min(insertionIndex, stations.size()) : stations.size();
+                stations.add(at, new Station("RT", title, dial, "ONLINE", url));
+                insertionIndex = at + 1;
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            if (selectedId != null) {
+                for (int i = 0; i < stations.size(); i++) {
+                    if (selectedId.equals(stations.get(i).id)) {
+                        prefs.edit().putInt(KEY_INDEX, i).apply();
+                        break;
+                    }
+                }
+            }
+            saveStations();
+        }
     }
 
     private void addDefaultStations() {
         stations.clear();
         stations.add(new Station("MC", "MACONDO STEREO", "103.4 FM", "FM", "fm://103.4"));
-        stations.add(new Station("RT", "RADIO TIEMPO BARRANQUILLA", "96.1 FM", "ONLINE", "https://playerservices.streamtheworld.com/api/livestream-redirect/RT_BARRANQUILLAAAC.aac"));
+        stations.add(new Station("RT", "BARRANQUILLA", "96.1 FM", "ONLINE",
+                RT_HOST + "RT_BARRANQUILLAAAC.aac"));
         stations.add(new Station("OL", "OLÍMPICA BARRANQUILLA", "92.1 FM", "ONLINE", "https://playerservices.streamtheworld.com/api/livestream-redirect/OLP_BARRANQUILLAAAC_SC"));
         stations.add(new Station("LR", "LA REINA BARRANQUILLA", "98.6 FM", "ONLINE", "https://playerservices.streamtheworld.com/api/livestream-redirect/RNA_BARRANQUILLA_SC"));
         stations.add(new Station("MX", "MIX RADIO BARRANQUILLA", "103.9 FM", "ONLINE", "https://playerservices.streamtheworld.com/api/livestream-redirect/MIX_BARRANQUILLAAAC.aac"));
@@ -828,6 +919,18 @@ public class MainActivity extends Activity {
         String n = s.name.toUpperCase(Locale.ROOT);
 
         if (n.contains("MACONDO")) return R.drawable.macondo;
+        String url = s.url == null ? "" : s.url.toUpperCase(Locale.ROOT);
+        if (url.contains("RT_CLASICA") || n.equals("CLASICOS")
+                || n.equals("RADIO TIEMPO CLÁSICOS") || n.equals("RADIO TIEMPO CLASICOS")) {
+            return R.drawable.radio_tiempo_clasicos;
+        }
+        // The normal Radio Tiempo artwork is shared across all six cities,
+        // even when the title now contains only the city name.
+        for (String[] rt : RADIO_TIEMPO_STATIONS) {
+            if (!"RT_CLASICA".equals(rt[2]) && url.contains(rt[2])) {
+                return R.drawable.radio_tiempo;
+            }
+        }
         if (n.contains("RADIO TIEMPO")) return R.drawable.radio_tiempo;
         if (n.contains("OLÍMPICA") || n.contains("OLIMPICA")) {
             if (n.contains("SANTA MARTA")) return R.drawable.olimpica_smr;
