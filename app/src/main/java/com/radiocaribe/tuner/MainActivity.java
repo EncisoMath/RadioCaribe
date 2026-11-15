@@ -1343,9 +1343,10 @@ public class MainActivity extends Activity {
                 appendDiag(detail);
                 if (!ok) {
                     Toast.makeText(this,
-                            detail != null && (detail.contains("ROOT") || detail.contains("su:"))
-                                    ? "La FM necesita permiso root para RadioCaribe. Autorízalo en el teléfono."
-                                    : "FM interno no pudo iniciar. Pulsa NET para ver el punto exacto.",
+                            detail != null && (detail.contains("Permission denied")
+                                    || detail.contains("su:") || detail.contains("not allowed"))
+                                    ? "Magisk denegó root a RadioCaribe; verifica la autorización."
+                                    : "FM no pudo iniciarse. Pulsa NET para ver la causa real.",
                             Toast.LENGTH_LONG).show();
                 }
             });
