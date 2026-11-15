@@ -42,21 +42,38 @@ public final class FmBridgeAutostart {
         final Context app = context.getApplicationContext();
         try {
             ApplicationInfo info = app.getApplicationInfo();
-            File cpp = new File(info.nativeLibraryDir, "libc++.so");
+            // The FM vendor JNI is bundled in the APK. Android 9 exposes
+            // its platform libc++.so under /system/lib on 32-bit devices;
+            // that runtime is NOT bundled in RadioCaribe's jniLibs folder.
+            // v0.34 wrongly rejected every FM request before it could call su.
             File fm = new File(info.nativeLibraryDir, "libfmjni.so");
             File apk = new File(info.sourceDir);
-            if (!cpp.isFile() || !fm.isFile() || !apk.isFile()) {
-                throw new IllegalStateException("Faltan las bibliotecas FM dentro del APK");
+            if (!fm.isFile()) {
+                throw new IllegalStateException("FM nativa no extraída: "
+                        + fm.getAbsolutePath() + " (verificar APK/ABI)");
             }
+            if (!apk.isFile()) {
+                throw new IllegalStateException("Ruta del APK no encontrada");
+            }
+            File cpp = new File(info.nativeLibraryDir, "libc++.so");
+            String cppInstall = cpp.isFile()
+                    ? "cp " + quote(cpp.getAbsolutePath())
+                        + " /data/local/tmp/radiocaribe-fm/libc++.so || exit 73; "
+                    : // Preserve a previously working runtime from the owner's
+                      // root FM bridge; otherwise use Android's 32-bit runtime.
+                      "if [ -s /data/local/tmp/radiocaribe-fm/libc++.so ]; then :; " +
+                      "elif [ -r /system/lib/libc++.so ]; then " +
+                      "cp /system/lib/libc++.so /data/local/tmp/radiocaribe-fm/libc++.so || exit 73; " +
+                      "elif [ -r /vendor/lib/libc++.so ]; then " +
+                      "cp /vendor/lib/libc++.so /data/local/tmp/radiocaribe-fm/libc++.so || exit 73; " +
+                      "else echo 'FM_ROOT_ERR: libc++.so ausente en sistema'; exit 76; fi; ";
 
-            // Every filesystem path is derived from Android application metadata,
-            // never from user input. Single-quote escape for shell safety.
+            // Source paths come exclusively from Android app metadata.
             String script =
                     "umask 077; " +
                     "mkdir -p /data/local/tmp/radiocaribe-fm || exit 71; " +
                     "chmod 700 /data/local/tmp/radiocaribe-fm || exit 72; " +
-                    "cp " + quote(cpp.getAbsolutePath()) +
-                    " /data/local/tmp/radiocaribe-fm/libc++.so || exit 73; " +
+                    cppInstall +
                     "cp " + quote(fm.getAbsolutePath()) +
                     " /data/local/tmp/radiocaribe-fm/libfmjni.so || exit 74; " +
                     "chmod 600 /data/local/tmp/radiocaribe-fm/libc++.so " +
@@ -78,7 +95,8 @@ public final class FmBridgeAutostart {
                             if (logger != null) logger.log("FM: controlador root iniciado en el teléfono");
                         } else if (line.contains("FM_BRIDGE_FATAL") ||
                                 line.contains("Exception") || line.contains("denied") ||
-                                line.contains("not found") || line.contains("error:")) {
+                                line.contains("not found") || line.contains("error:") ||
+                                line.contains("FM_ROOT_ERR")) {
                             if (logger != null) logger.log("FM ROOT: " + trim(line));
                             lastProblem = trim(line);
                         }
