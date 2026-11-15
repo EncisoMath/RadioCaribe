@@ -128,11 +128,13 @@ public class MainActivity extends Activity {
     };
     private final Runnable volumeWatchdog = new Runnable() {
         @Override public void run() {
+            if (ultraSleeping) return;
             volumeRecheck.run();
             handler.postDelayed(this, VOLUME_WATCHDOG_MS);
         }
     };
     private void scheduleVolumeRechecks() {
+        if (ultraSleeping) return;
         handler.removeCallbacks(volumeRecheck);
         volumeRecheck.run();
         handler.postDelayed(volumeRecheck, 250L);
@@ -158,6 +160,26 @@ public class MainActivity extends Activity {
     private InternalFmController fmController;
     private WebAdminServer webAdmin;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private boolean ultraSleeping;
+    private boolean wasPlayingBeforeSleep = true;
+    private boolean batteryReceiverRegistered;
+
+    private final Runnable ultraSleepRequest = new Runnable() {
+        @Override public void run() { enterUltraSleep(); }
+    };
+    private final BroadcastReceiver powerReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!UltraSleep.enabled(MainActivity.this)) return;
+            String action = intent.getAction();
+            if (Intent.ACTION_POWER_CONNECTED.equals(action)) {
+                handler.removeCallbacks(ultraSleepRequest);
+                exitUltraSleep();
+            } else if (Intent.ACTION_POWER_DISCONNECTED.equals(action)) {
+                handler.removeCallbacks(ultraSleepRequest);
+                handler.postDelayed(ultraSleepRequest, 6000L); // Ignore brief power dips.
+            }
+        }
+    };
 
     private int stationIndex = 0;
     private boolean darkMode = false;
@@ -259,6 +281,11 @@ public class MainActivity extends Activity {
         handler.postDelayed(volumeWatchdog, VOLUME_WATCHDOG_MS);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         fmController = new InternalFmController(this, this::appendDiag);
+        IntentFilter powerEvents = new IntentFilter();
+        powerEvents.addAction(Intent.ACTION_POWER_CONNECTED);
+        powerEvents.addAction(Intent.ACTION_POWER_DISCONNECTED);
+        registerReceiver(powerReceiver, powerEvents);
+        if (UltraSleep.enabled(this) && UltraSleep.powered(this)) UltraSleep.restore(this);
 
         loadStations();
         stationIndex = Math.max(0, Math.min(stations.size() - 1, prefs.getInt(KEY_INDEX, 0)));
@@ -266,7 +293,7 @@ public class MainActivity extends Activity {
 
         buildUi();
         enterImmersiveMode();
-        registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        registerBatteryMonitor();
         clockTicker.run();
 
         markRecent(stations.get(stationIndex));
@@ -280,11 +307,21 @@ public class MainActivity extends Activity {
             }
         });
         webAdmin.start();
-        playCurrentStation(false);
+        if (UltraSleep.enabled(this) && !UltraSleep.powered(this)) {
+            // New process started off USB: do not start Wi-Fi or FM just to sleep.
+            shouldPlay = false;
+            handler.postDelayed(ultraSleepRequest, 1500L);
+        } else {
+            playCurrentStation(false);
+        }
     }
 
     @Override protected void onResume() {
         super.onResume();
+        if (UltraSleep.enabled(this) && UltraSleep.powered(this)
+                && (ultraSleeping || UltraSleep.sleeping(this))) {
+            exitUltraSleep();
+        }
         scheduleVolumeRechecks();
         enterImmersiveMode();
         if (wifiView != null) wifiView.invalidate();
@@ -292,7 +329,11 @@ public class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
-        try { unregisterReceiver(batteryReceiver); } catch (Exception ignored) { }
+        if (batteryReceiverRegistered) {
+            try { unregisterReceiver(batteryReceiver); } catch (Exception ignored) { }
+            batteryReceiverRegistered = false;
+        }
+        try { unregisterReceiver(powerReceiver); } catch (Exception ignored) { }
         try { unregisterReceiver(jackReceiver); } catch (Exception ignored) { }
         if (audioManager != null) audioManager.unregisterAudioDeviceCallback(audioDeviceCallback);
         if (webAdmin != null) webAdmin.stop();
@@ -300,6 +341,66 @@ public class MainActivity extends Activity {
         releaseStreamingBooster();
         if (fmController != null) fmController.stop();
         super.onDestroy();
+    }
+
+    private void registerBatteryMonitor() {
+        if (batteryReceiverRegistered) return;
+        registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        batteryReceiverRegistered = true;
+    }
+
+    private void enterUltraSleep() {
+        if (ultraSleeping || !UltraSleep.enabled(this) || UltraSleep.powered(this)) return;
+        ultraSleeping = true;
+        wasPlayingBeforeSleep = shouldPlay;
+        shouldPlay = false;
+        handler.removeCallbacks(retryRunnable);
+        handler.removeCallbacks(volumeWatchdog);
+        handler.removeCallbacks(volumeRecheck);
+        handler.removeCallbacks(clockTicker);
+        if (batteryReceiverRegistered) {
+            try { unregisterReceiver(batteryReceiver); } catch (Exception ignored) { }
+            batteryReceiverRegistered = false;
+        }
+        releasePlayer();
+        releaseStreamingBooster();
+        if (fmController != null) fmController.stopAsync();
+        if (webAdmin != null) webAdmin.setSuspended(true);
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        sourceView.setText("REPOSO");
+        updateSourcePill();
+        android.util.Log.i("RadioCaribeSleep", "Radio paused, web server parked, screen allowed to sleep");
+        UltraSleep.enter(this); // Save Wi-Fi/Bluetooth state before disabling them.
+        if (UltraSleep.sleeping(this)) {
+            handler.postDelayed(() -> {
+                if (ultraSleeping && !UltraSleep.powered(this)) UltraSleep.sleepScreenAsync(this);
+            }, 800L);
+        } else {
+            // Refuse to sleep without durable state or if USB reconnected.
+            exitUltraSleep();
+        }
+    }
+
+    private void exitUltraSleep() {
+        if (!ultraSleeping && !UltraSleep.sleeping(this)) return;
+        handler.removeCallbacks(ultraSleepRequest);
+        UltraSleep.restore(this);
+        ultraSleeping = false;
+        shouldPlay = wasPlayingBeforeSleep;
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        registerBatteryMonitor();
+        clockTicker.run();
+        if (webAdmin != null) webAdmin.setSuspended(false);
+        scheduleVolumeRechecks();
+        handler.removeCallbacks(volumeWatchdog);
+        handler.postDelayed(volumeWatchdog, VOLUME_WATCHDOG_MS);
+        if (shouldPlay && !isFinishing()) playCurrentStation(false);
+        android.util.Log.i("RadioCaribeSleep", "USB active: media resumed and web listener unparked");
+    }
+
+    @Override public void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (UltraSleep.enabled(this) && UltraSleep.powered(this)) exitUltraSleep();
     }
 
     @Override public void onWindowFocusChanged(boolean hasFocus) {
