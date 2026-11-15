@@ -54,14 +54,14 @@ jobs:
           test -s "$APK"
           unzip -l "$APK" | grep "lib/armeabi-v7a/libfmjni.so"
           "$ANDROID_HOME/build-tools/33.0.2/apksigner" verify --verbose "$APK"
-          cp "$APK" RadioCaribe_v0.35.apk
-          sha256sum RadioCaribe_v0.35.apk
+          cp "$APK" RadioCaribe_v0.36.apk
+          sha256sum RadioCaribe_v0.36.apk
 
       - name: Upload installable APK to Actions
         uses: actions/upload-artifact@v4
         with:
-          name: RadioCaribe-v0.35-APK
-          path: RadioCaribe_v0.35.apk
+          name: RadioCaribe-v0.36-APK
+          path: RadioCaribe_v0.36.apk
           if-no-files-found: error
 
       - name: Publish APK in GitHub Releases
@@ -70,7 +70,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > release-notes.md <<'EOF'
-          RadioCaribe v0.35 — Moto G3 (Android 9 / LineageOS).
+          RadioCaribe v0.36 — Moto G3 (Android 9 / LineageOS).
           
           - Internet radio now plays on any active media output: wired headphone,
             wired headset, USB, Bluetooth, or phone speaker (no jack required).
@@ -81,8 +81,17 @@ jobs:
           - ExoPlayer manages internet-stream audio focus and releases it
             correctly on stop, reconnect or station change.
           - Fixes FM native bridge startup: Android 9 platform libc++.so
-            was incorrectly expected in the APK; v0.35 uses the system
+            was incorrectly expected in the APK; v0.36 uses the system
             32-bit runtime or previously working root-bridge copy.
+          - NEW: true 12-band PCM equalizer, adjusted in-app beside NET.
+          - NEW: digital amplifier 0..+25 dB, default +10 dB,
+            applied once by the same DSP to avoid double boosting.
+          - Real-time audio changes and saved preferences; 12 independent
+            custom touch-driven band faders from -12 to +12 dB.
+          - Built-in soft limiter prevents PCM numeric overflow; high
+            amplification may still distort and can damage speakers.
+          - Effects apply to ONLINE radio PCM; physical FM bypasses
+            ExoPlayer and cannot be equalized through this audio path.
           - Reports actual FM bridge errors instead of falsely asking for
             Magisk authorization when native startup failed.
           - Preserves physical FM routing, online radio, +10 dB and USB sleep.
@@ -110,11 +119,11 @@ jobs:
           certificate (the same debug-signing configuration used by previous builds).
           Existing-app updates require matching signing certificates.
           EOF
-          if gh release view "v0.35" >/dev/null 2>&1; then
-            gh release upload "v0.35" RadioCaribe_v0.35.apk --clobber
+          if gh release view "v0.36" >/dev/null 2>&1; then
+            gh release upload "v0.36" RadioCaribe_v0.36.apk --clobber
           else
-            gh release create "v0.35" RadioCaribe_v0.35.apk \
-              --title "RadioCaribe v0.35 — Reparación FM" \
+            gh release create "v0.36" RadioCaribe_v0.36.apk \
+              --title "RadioCaribe v0.36 — EQ de 12 bandas + 25 dB" \
               --notes-file release-notes.md \
               --target "$GITHUB_SHA"
           fi
