@@ -1,12 +1,12 @@
-name: Build RadioCaribe APK
+name: Build and Release RadioCaribe APK
 
 on:
   push:
-    branches: ["main", "fix/carousel-edge-select-v019", "feature/media-max-boost-v020", "fix/jack-audio-stable-v022", "feature/web-admin-lan-v031"]
+    branches: ["main", "feature/web-admin-lan-v031"]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -45,19 +45,72 @@ jobs:
         with:
           gradle-version: "7.5.1"
 
-      - name: Build installable debug APK
-        run: gradle :app:assembleDebug --stacktrace
+      - name: Build signed installable release APK
+        run: gradle :app:assembleDebug :app:assembleRelease --stacktrace
 
-      - name: Verify bundled FM JNI
+      - name: Verify signed APK and native FM library
         run: |
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "lib/armeabi-v7a/libfmjni.so"
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          unzip -l "$APK" | grep "lib/armeabi-v7a/libfmjni.so"
+          "$ANDROID_HOME/build-tools/33.0.2/apksigner" verify --verbose "$APK"
+          cp "$APK" RadioCaribe_v0.32.apk
+          sha256sum RadioCaribe_v0.32.apk
 
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk RadioCaribe_v0.31_WEB_SIGNED.apk
-
-      - name: Upload APK
+      - name: Upload installable APK to Actions
         uses: actions/upload-artifact@v4
         with:
-          name: RadioCaribe-v0.31-WEB-SIGNED
-          path: RadioCaribe_v0.31_WEB_SIGNED.apk
+          name: RadioCaribe-v0.32-APK
+          path: RadioCaribe_v0.32.apk
           if-no-files-found: error
+
+      - name: Publish APK in GitHub Releases
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > release-notes.md <<'EOF'
+          RadioCaribe v0.32 — Moto G3 (Android 9 / LineageOS).
+          
+          - Internet radio now plays on any active media output: wired headphone,
+            wired headset, USB, Bluetooth, or phone speaker (no jack required).
+          - Automatically restores the active route's music volume to its system
+            maximum (typically 25/25 on this Moto G3), including after a route
+            change and via a periodic four-second check.
+          - Internet streams receive a persistent +10 dB LoudnessEnhancer.
+          - ExoPlayer manages internet-stream audio focus and releases it
+            correctly on stop, reconnect or station change.
+          - Preserves the rooted physical FM route and existing web administration.
+          
+          CAUTION: Maximum system volume plus +10 dB can be extremely loud on
+          headphones, Bluetooth speakers or the phone speaker. Turn down the
+          connected amplifier BEFORE installing and testing. Boosting may cause
+          distortion on already-loud streams. The app does not increase analog
+          hardware gain beyond Android's system limit.
+          
+          APK is the release variant signed with the project's cached update
+          certificate (the same debug-signing configuration used by previous builds).
+          Existing-app updates require matching signing certificates.
+          EOF
+          if gh release view "v0.32" >/dev/null 2>&1; then
+            gh release upload "v0.32" RadioCaribe_v0.32.apk --clobber
+          else
+            gh release create "v0.32" RadioCaribe_v0.32.apk \
+              --title "RadioCaribe v0.32 — Universal Audio +10 dB" \
+              --notes-file release-notes.md \
+              --target "$GITHUB_SHA"
+          fi
+
+      - name: Remove old feature and fix branches after successful release
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq '.[].name' |
+            while IFS= read -r branch; do
+              if [ -n "$branch" ] && [ "$branch" != "main" ]; then
+                echo "Removing obsolete branch: $branch"
+                gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch"
+              fi
+            done
