@@ -25,6 +25,8 @@ final class WebAdminServer {
     private volatile String address = "";
     private Thread thread;
     private final ExecutorService clients = Executors.newFixedThreadPool(2);
+    private volatile boolean suspended;
+    private final Object parkLock = new Object();
 
     WebAdminServer(Context context, android.os.Handler mainHandler, Controller controller) {
         this.context = context.getApplicationContext();
@@ -39,8 +41,17 @@ final class WebAdminServer {
         thread.setDaemon(true);
         thread.start();
     }
+    void setSuspended(boolean value) {
+        suspended = value;
+        if (value) {
+            address = "";
+            try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
+        }
+        synchronized (parkLock) { parkLock.notifyAll(); }
+    }
     void stop() {
         running = false;
+        synchronized (parkLock) { parkLock.notifyAll(); }
         address = "";
         try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
         clients.shutdownNow();
@@ -64,6 +75,18 @@ final class WebAdminServer {
     }
     private void runServer() {
         while (running) {
+            if (suspended) {
+                synchronized (parkLock) {
+                    while (suspended && running) {
+                        try { parkLock.wait(); }
+                        catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                }
+                continue;
+            }
             try {
                 InetAddress bindIp = wifiAddress();
                 if (bindIp == null) { address = ""; Thread.sleep(2000); continue; }
@@ -74,7 +97,7 @@ final class WebAdminServer {
                 srv.setSoTimeout(1500);
                 address = "http://" + bindIp.getHostAddress() + ":8080";
                 Log.i("RadioCaribeWeb", "Wi-Fi admin available: " + address);
-                while (running && bindIp.equals(wifiAddress())) {
+                while (running && !suspended && bindIp.equals(wifiAddress())) {
                     try {
                         Socket client = srv.accept();
                         try { clients.execute(() -> handle(client)); }
@@ -89,7 +112,7 @@ final class WebAdminServer {
                 try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
                 serverSocket = null;
             }
-            if (running) try { Thread.sleep(1800); } catch (InterruptedException ignored) { break; }
+            if (running && !suspended) try { Thread.sleep(1800); } catch (InterruptedException ignored) { break; }
         }
     }
     private static String line(InputStream in) throws IOException {
