@@ -54,14 +54,14 @@ jobs:
           test -s "$APK"
           unzip -l "$APK" | grep "lib/armeabi-v7a/libfmjni.so"
           "$ANDROID_HOME/build-tools/33.0.2/apksigner" verify --verbose "$APK"
-          cp "$APK" RadioCaribe_v0.33.apk
-          sha256sum RadioCaribe_v0.33.apk
+          cp "$APK" RadioCaribe_v0.34.apk
+          sha256sum RadioCaribe_v0.34.apk
 
       - name: Upload installable APK to Actions
         uses: actions/upload-artifact@v4
         with:
-          name: RadioCaribe-v0.33-APK
-          path: RadioCaribe_v0.33.apk
+          name: RadioCaribe-v0.34-APK
+          path: RadioCaribe_v0.34.apk
           if-no-files-found: error
 
       - name: Publish APK in GitHub Releases
@@ -70,7 +70,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > release-notes.md <<'EOF'
-          RadioCaribe v0.33 — Moto G3 (Android 9 / LineageOS).
+          RadioCaribe v0.34 — Moto G3 (Android 9 / LineageOS).
           
           - Internet radio now plays on any active media output: wired headphone,
             wired headset, USB, Bluetooth, or phone speaker (no jack required).
@@ -91,9 +91,12 @@ jobs:
           Ultra-sleep is OPTIONAL and DISABLED by default. Enable on the
           Moto G3 with: adb shell settings put global radiocaribe_ultra_sleep 1
           Disable with: adb shell settings put global radiocaribe_ultra_sleep 0
-          Unplugging external USB power for six seconds stops audio and
+          Unplugging external USB power for ~1 second stops audio and
           web administration, disables Wi-Fi/Bluetooth, and turns off screen.
-          Reconnecting USB restores radio, display, Wi-Fi and ADB connectivity.
+          Reconnecting USB wakes the screen before network restoration.
+          Online playback resumes on the first connectivity broadcast.
+          Fast Wi-Fi (higher drain): radiocaribe_sleep_keep_wifi=1
+          Lowest battery drain (Wi-Fi off): radiocaribe_sleep_keep_wifi=0
           It requires a working battery and a charging-trigger wakeup on the ROM.
           While unplugged, wireless ADB will not be available.
           Test USB wake on the device before leaving the feature enabled.
@@ -102,11 +105,11 @@ jobs:
           certificate (the same debug-signing configuration used by previous builds).
           Existing-app updates require matching signing certificates.
           EOF
-          if gh release view "v0.33" >/dev/null 2>&1; then
-            gh release upload "v0.33" RadioCaribe_v0.33.apk --clobber
+          if gh release view "v0.34" >/dev/null 2>&1; then
+            gh release upload "v0.34" RadioCaribe_v0.34.apk --clobber
           else
-            gh release create "v0.33" RadioCaribe_v0.33.apk \
-              --title "RadioCaribe v0.33 — Universal Audio +10 dB" \
+            gh release create "v0.34" RadioCaribe_v0.34.apk \
+              --title "RadioCaribe v0.34 — Reposo USB más rápido" \
               --notes-file release-notes.md \
               --target "$GITHUB_SHA"
           fi
