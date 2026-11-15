@@ -1,4 +1,4 @@
-# RadioCaribe v0.34
+# RadioCaribe v0.35
 
 Reproductor dedicado para el **Moto G3 con LineageOS 16 / Android 9**, con emisoras online y FM física.
 
@@ -10,11 +10,24 @@ Reproductor dedicado para el **Moto G3 con LineageOS 16 / Android 9**, con emiso
 
 La FM física sigue usando el controlador root y la ruta de audio originales; no recibe el aumento de +10 dB.
 
+## FM física (v0.35)
+
+Se corrigió el error de v0.34 que exigía `libc++.so` dentro del APK, aunque Android 9 la proporciona como biblioteca del sistema. El puente root ahora emplea `/system/lib/libc++.so`, `/vendor/lib/libc++.so` o una copia previamente instalada en el puente, e informa de una causa concreta cuando falta una dependencia.
+
+**Magisk:** el UID de RadioCaribe necesita autorización `policy=2`. Si el gestor no muestra la solicitud, con acceso root desde ADB puedes establecer la política manualmente dentro de `adb shell` → `su`:
+
+```sh
+magisk --sqlite "REPLACE INTO policies (uid,policy,until,logging,notification) VALUES (10104,2,0,1,0);"
+magisk --sqlite "SELECT * FROM policies WHERE uid=10104;"
+```
+
+El UID `10104` es el del Moto G3 del propietario en esta instalación; siempre verifica el UID real con `adb shell pm list packages -U com.radiocaribe.tuner`. Tras instalar, reinicia la app y consulta los registros con `adb logcat -d -s RadioCaribeFM:I *:S`.
+
 **Advertencia:** volumen máximo y +10 dB pueden generar distorsión y niveles peligrosos, especialmente con auriculares o Bluetooth. Baja primero la amplificación externa. El programa restablece el volumen alto mientras está ejecutándose.
 
 **Nota Android:** cada salida conserva su propio volumen. Las APIs públicas ajustan la ruta **activa**; RadioCaribe fijará automáticamente el máximo en cualquier nueva ruta cuando se conecte, pero no modifica simultáneamente índices de salidas desconectadas.
 
-## Reposo profundo opcional por USB (v0.34, experimental)
+## Reposo profundo opcional por USB (v0.35, experimental)
 
 **Apagado por defecto**, para no dejar el Moto G3 sin ADB Wi-Fi antes de probar el despertar con USB. Actívalo desde CMD cuando el teléfono esté encendido y conectado a la red:
 
@@ -72,6 +85,6 @@ Los scripts Magisk v3 que ajustan volumen 25/25 y ADB TCP 5555 **no necesitan se
 ## Administración y APK
 - Interfaz de radio horizontal, temas claro/oscuro y última emisora recordada.
 - Editor de emisoras y logos por Wi-Fi en el puerto 8080. **Sin PIN:** utilizar solo en redes de confianza.
-- [APK publicado en GitHub Releases](https://github.com/EncisoMath/RadioCaribe/releases/latest): `RadioCaribe_v0.34.apk`.
+- [APK publicado en GitHub Releases](https://github.com/EncisoMath/RadioCaribe/releases/latest): `RadioCaribe_v0.35.apk`.
 - Para actualizar sin desinstalar, el certificado de firma del nuevo APK debe coincidir con el anterior. El workflow intenta reutilizar la misma clave en caché.
 - **Rama única:** `main`. Compilación con GitHub Actions, Android SDK 33 y Gradle 7.5.1.
