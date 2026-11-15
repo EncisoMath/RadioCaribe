@@ -31,6 +31,9 @@ android {
 
     buildTypes {
         release {
+            // Use the same cached signing certificate as legacy debug APKs so
+            // upgrades over an existing Moto G3 installation remain possible.
+            signingConfig signingConfigs.debug
             minifyEnabled false
             shrinkResources false
         }
