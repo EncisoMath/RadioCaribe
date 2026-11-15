@@ -1,13 +1,8 @@
-RadioCaribe v0.1 - Moto G3 / Android 9
+RadioCaribe v0.32 — Moto G3 / Android 9
 
-- Landscape fijo
-- Tema claro / oscuro (botón superior izquierdo)
-- Hora grande
-- 10 emisoras online
-- Anterior / Play-Pausa / Siguiente
-- Recuerda la última emisora usada
-- Reproduce automáticamente al abrir
-- Reintenta si el stream falla
-- Sin Google Play Services ni librerías externas
+La documentación completa está en README.md.
+Descarga APK: https://github.com/EncisoMath/RadioCaribe/releases/latest
 
-La integración de FM física (Macondo Stereo 103.4) se hará en la siguiente iteración.
+Radio por Internet en cualquier salida, máximo volumen multimedia
+para la ruta activa y aumento de +10 dB solo online. FM sin cambios.
+ATENCIÓN: volumen máximo +10 dB puede ser extremadamente alto.

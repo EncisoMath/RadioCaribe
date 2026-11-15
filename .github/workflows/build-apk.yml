@@ -2,7 +2,7 @@ name: Build and Release RadioCaribe APK
 
 on:
   push:
-    branches: ["main", "feature/web-admin-lan-v031"]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
