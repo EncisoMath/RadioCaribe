@@ -1,14 +1,39 @@
-# RadioCaribe v0.36
+# RadioCaribe v0.37
 
 Reproductor dedicado para el **Moto G3 con LineageOS 16 / Android 9**, con emisoras online y FM física.
+
+## Radio Tiempo por ciudades y Clásicos (v0.37)
+
+En la lista de estaciones aparecen **BARRANQUILLA, CALI, MEDELLÍN,
+CARTAGENA, MONTERÍA y SINCELEJO**, compartiendo el logo original de
+Radio Tiempo. **CLASICOS** utiliza el logo especial enviado por el propietario.
+
+| Título | Frecuencia | Streaming |
+|---|---|---|
+| BARRANQUILLA | 96.1 FM | `RT_BARRANQUILLAAAC.aac` |
+| CALI | 89.5 FM | `RT_CALIAAC_SC` |
+| MEDELLÍN | 105.9 FM | `RT_MEDELLINAAC.aac` |
+| CARTAGENA | 88.5 FM | `RT_CARTAGENAAAC.aac` |
+| MONTERÍA | 104.5 FM | `RT_MONTERIAAAC.aac` |
+| SINCELEJO | 97.3 FM | `RT_SINCELEJOAAC.aac` |
+| CLASICOS | Online | `RT_CLASICA_SC` |
+
+Los enlaces utilizan `playerservices.streamtheworld.com/api/livestream-redirect/`.
+La URL de Clásicos fue confirmada como funcional por el propietario; la
+reproducción efectiva de las demás depende del servidor de cada emisora.
+
+**Migración:** al actualizar, la aplicación agrega las estaciones que falten,
+renombra Barranquilla conservando su ID y no borra emisoras ni logos
+personalizados. También preserva la selección anterior aunque se inserten
+nuevas estaciones.
 
 ## Sonido online
 - Reproduce por **cualquier salida disponible**, con o sin cable jack: altavoz, auriculares, USB y Bluetooth.
 - Restablece automáticamente el **máximo de volumen multimedia de la ruta activa** (normalmente 25/25 en el Moto G3), cuando cambia la salida y cada 4 segundos.
-- Aplica **+10 dB** con `LoudnessEnhancer` a las emisoras por Internet en todas las salidas.
+- Usa el ecualizador digital de 12 bandas y amplificación ajustable de **0 a +25 dB** (por defecto +10 dB).
 - ExoPlayer se encarga de la prioridad de audio y la reconexión de streams.
 
-### Ecualizador de 12 bandas y amplificador (v0.36)
+### Ecualizador de 12 bandas y amplificador (v0.37)
 
 Pulsa el **icono EQ (☷) inmediatamente a la derecha de NET**. Se abre una ventana horizontal con 12 faders reales a 32, 64, 125, 250, 500 Hz; 1, 2, 3, 4, 6, 10 y 16 kHz.
 
@@ -21,7 +46,7 @@ Pulsa el **icono EQ (☷) inmediatamente a la derecha de NET**. Se abre una vent
 
 **La FM física sigue usando el puente root y la ruta de audio hardware original: la señal FM no pasa por ExoPlayer PCM, así que el EQ y la ganancia configurables se aplican a las emisoras ONLINE, no a la FM física.**
 
-## FM física (v0.36)
+## FM física (v0.37)
 
 Se corrigió el error de v0.34 que exigía `libc++.so` dentro del APK, aunque Android 9 la proporciona como biblioteca del sistema. El puente root ahora emplea `/system/lib/libc++.so`, `/vendor/lib/libc++.so` o una copia previamente instalada en el puente, e informa de una causa concreta cuando falta una dependencia.
 
@@ -38,7 +63,7 @@ El UID `10104` es el del Moto G3 del propietario en esta instalación; siempre v
 
 **Nota Android:** cada salida conserva su propio volumen. Las APIs públicas ajustan la ruta **activa**; RadioCaribe fijará automáticamente el máximo en cualquier nueva ruta cuando se conecte, pero no modifica simultáneamente índices de salidas desconectadas.
 
-## Reposo profundo opcional por USB (v0.36, experimental)
+## Reposo profundo opcional por USB (v0.37, experimental)
 
 **Apagado por defecto**, para no dejar el Moto G3 sin ADB Wi-Fi antes de probar el despertar con USB. Actívalo desde CMD cuando el teléfono esté encendido y conectado a la red:
 
@@ -96,6 +121,6 @@ Los scripts Magisk v3 que ajustan volumen 25/25 y ADB TCP 5555 **no necesitan se
 ## Administración y APK
 - Interfaz de radio horizontal, temas claro/oscuro y última emisora recordada.
 - Editor de emisoras y logos por Wi-Fi en el puerto 8080. **Sin PIN:** utilizar solo en redes de confianza.
-- [APK publicado en GitHub Releases](https://github.com/EncisoMath/RadioCaribe/releases/latest): `RadioCaribe_v0.36.apk`.
+- [APK publicado en GitHub Releases](https://github.com/EncisoMath/RadioCaribe/releases/latest): `RadioCaribe_v0.37.apk`.
 - Para actualizar sin desinstalar, el certificado de firma del nuevo APK debe coincidir con el anterior. El workflow intenta reutilizar la misma clave en caché.
 - **Rama única:** `main`. Compilación con GitHub Actions, Android SDK 33 y Gradle 7.5.1.
