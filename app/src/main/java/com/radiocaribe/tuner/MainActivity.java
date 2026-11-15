@@ -163,6 +163,26 @@ public class MainActivity extends Activity {
     private boolean ultraSleeping;
     private boolean wasPlayingBeforeSleep = true;
     private boolean batteryReceiverRegistered;
+    private boolean waitingForNetwork;
+    private long lastPowerDisconnectedMs;
+    private long lastPowerConnectedMs;
+
+    // Android 9 delivers connectivity changes to a dynamically registered
+    // receiver. Restart the online stream as soon as Wi-Fi is usable, rather
+    // than waiting for the normal 5-second offline retry.
+    private final BroadcastReceiver networkReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (waitingForNetwork && !ultraSleeping && shouldPlay
+                    && !isFinishing() && isNetworkAvailable()) {
+                waitingForNetwork = false;
+                handler.removeCallbacks(retryRunnable);
+                android.util.Log.i("RadioCaribeSleep", "Internet connected: start radio immediately"
+                        + " (" + (android.os.SystemClock.elapsedRealtime() - lastPowerConnectedMs)
+                        + " ms after USB connection)");
+                playCurrentStation(true);
+            }
+        }
+    };
 
     private final Runnable ultraSleepRequest = new Runnable() {
         @Override public void run() { enterUltraSleep(); }
@@ -172,11 +192,16 @@ public class MainActivity extends Activity {
             if (!UltraSleep.enabled(MainActivity.this)) return;
             String action = intent.getAction();
             if (Intent.ACTION_POWER_CONNECTED.equals(action)) {
+                lastPowerConnectedMs = android.os.SystemClock.elapsedRealtime();
                 handler.removeCallbacks(ultraSleepRequest);
+                // Wake the screen before requesting Wi-Fi/Bluetooth restoration.
+                UltraSleep.wakeScreen(MainActivity.this);
                 exitUltraSleep();
             } else if (Intent.ACTION_POWER_DISCONNECTED.equals(action)) {
+                lastPowerDisconnectedMs = android.os.SystemClock.elapsedRealtime();
                 handler.removeCallbacks(ultraSleepRequest);
-                handler.postDelayed(ultraSleepRequest, 6000L); // Ignore brief power dips.
+                handler.postDelayed(ultraSleepRequest, 1000L); // One-second debounce.
+                android.util.Log.i("RadioCaribeSleep", "USB disconnected; sleep in 1000 ms");
             }
         }
     };
@@ -285,6 +310,7 @@ public class MainActivity extends Activity {
         powerEvents.addAction(Intent.ACTION_POWER_CONNECTED);
         powerEvents.addAction(Intent.ACTION_POWER_DISCONNECTED);
         registerReceiver(powerReceiver, powerEvents);
+        registerReceiver(networkReceiver, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
         if (UltraSleep.enabled(this) && UltraSleep.powered(this)) UltraSleep.restore(this);
 
         loadStations();
@@ -334,6 +360,7 @@ public class MainActivity extends Activity {
             batteryReceiverRegistered = false;
         }
         try { unregisterReceiver(powerReceiver); } catch (Exception ignored) { }
+        try { unregisterReceiver(networkReceiver); } catch (Exception ignored) { }
         try { unregisterReceiver(jackReceiver); } catch (Exception ignored) { }
         if (audioManager != null) audioManager.unregisterAudioDeviceCallback(audioDeviceCallback);
         if (webAdmin != null) webAdmin.stop();
@@ -354,6 +381,7 @@ public class MainActivity extends Activity {
         ultraSleeping = true;
         wasPlayingBeforeSleep = shouldPlay;
         shouldPlay = false;
+        waitingForNetwork = false;
         handler.removeCallbacks(retryRunnable);
         handler.removeCallbacks(volumeWatchdog);
         handler.removeCallbacks(volumeRecheck);
@@ -369,14 +397,15 @@ public class MainActivity extends Activity {
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         sourceView.setText("REPOSO");
         updateSourcePill();
-        android.util.Log.i("RadioCaribeSleep", "Radio paused, web server parked, screen allowed to sleep");
-        UltraSleep.enter(this); // Save Wi-Fi/Bluetooth state before disabling them.
-        if (UltraSleep.sleeping(this)) {
-            handler.postDelayed(() -> {
-                if (ultraSleeping && !UltraSleep.powered(this)) UltraSleep.sleepScreenAsync(this);
-            }, 800L);
-        } else {
-            // Refuse to sleep without durable state or if USB reconnected.
+        // The screen command starts immediately on its own thread, BEFORE
+        // any Wi-Fi/Bluetooth binder calls. No additional 800-ms delay.
+        UltraSleep.sleepScreenAsync(this);
+        android.util.Log.i("RadioCaribeSleep", "USB off -> display sleep requested at "
+                + (android.os.SystemClock.elapsedRealtime() - lastPowerDisconnectedMs)
+                + " ms; audio paused and web server parked");
+        UltraSleep.enter(this);
+        if (!UltraSleep.sleeping(this)) {
+            // Refuse to stay suspended without durable state or if USB returned.
             exitUltraSleep();
         }
     }
@@ -384,8 +413,11 @@ public class MainActivity extends Activity {
     private void exitUltraSleep() {
         if (!ultraSleeping && !UltraSleep.sleeping(this)) return;
         handler.removeCallbacks(ultraSleepRequest);
-        UltraSleep.restore(this);
+        // Start the display/UI path first; restoring the Wi-Fi interface can
+        // take seconds even though waking the screen should be immediate.
+        UltraSleep.wakeScreen(this);
         ultraSleeping = false;
+        UltraSleep.restore(this);
         shouldPlay = wasPlayingBeforeSleep;
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         registerBatteryMonitor();
@@ -395,7 +427,9 @@ public class MainActivity extends Activity {
         handler.removeCallbacks(volumeWatchdog);
         handler.postDelayed(volumeWatchdog, VOLUME_WATCHDOG_MS);
         if (shouldPlay && !isFinishing()) playCurrentStation(false);
-        android.util.Log.i("RadioCaribeSleep", "USB active: media resumed and web listener unparked");
+        android.util.Log.i("RadioCaribeSleep", "USB active: UI awake at "
+                + (android.os.SystemClock.elapsedRealtime() - lastPowerConnectedMs)
+                + " ms; stream resumes as soon as network is ready");
     }
 
     @Override public void onNewIntent(Intent intent) {
@@ -1325,13 +1359,17 @@ public class MainActivity extends Activity {
 
         if (!isNetworkAvailable()) {
             preparing = false;
+            waitingForNetwork = true;
             updatePlayButton(false);
             sourceView.setText("SIN RED");
             updateSourcePill();
-            appendDiag("RED: sin conexión");
-            handler.postDelayed(retryRunnable, 5000L);
+            appendDiag("RED: esperando conexión Wi-Fi");
+            // Fallback for ROMs that omit connectivity broadcasts; the
+            // normal network receiver starts playback on connection.
+            handler.postDelayed(retryRunnable, 2000L);
             return;
         }
+        waitingForNetwork = false;
 
         preparing = true;
         connectStartMs = System.currentTimeMillis();
