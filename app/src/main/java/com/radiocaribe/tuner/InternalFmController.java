@@ -114,8 +114,8 @@ public final class InternalFmController {
                 if (generation != commandGeneration.get()) return;
                 String error = shortError(err);
                 if (err instanceof java.net.ConnectException) {
-                    detail = "FM ROOT sin acceso. Autoriza root para RadioCaribe en el telefono "
-                            + "(no basta ADB root). " + FmBridgeAutostart.getLastProblem();
+                    detail = "FM: puente nativo no disponible. Causa: "
+                            + FmBridgeAutostart.getLastProblem();
                 } else {
                     detail = "FM ROOT ERROR: " + error;
                 }
