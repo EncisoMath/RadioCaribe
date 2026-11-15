@@ -1447,6 +1447,28 @@ public class MainActivity extends Activity {
         return info != null && info.isConnected();
     }
 
+    /** Persist and apply audio DSP changes immediately without restarting the stream. */
+    private void saveEqualizerSettings() {
+        SharedPreferences.Editor editor = prefs.edit().putInt(KEY_EQ_GAIN, eqAmplificationDb);
+        for (int i = 0; i < eqBandsDb.length; i++) {
+            editor.putInt(KEY_EQ_BAND + i, eqBandsDb[i]);
+        }
+        editor.apply();
+        TwelveBandAudioProcessor dsp = activeEq;
+        if (dsp != null) dsp.setValues(eqBandsDb, eqAmplificationDb);
+    }
+
+    private void showEqualizerDialog() {
+        boolean fmSelected = !stations.isEmpty()
+                && "FM".equalsIgnoreCase(stations.get(stationIndex).source);
+        EqualizerDialog.show(this, darkMode, fmSelected, eqBandsDb, eqAmplificationDb,
+                (bands, gain) -> {
+                    System.arraycopy(bands, 0, eqBandsDb, 0, eqBandsDb.length);
+                    eqAmplificationDb = gain;
+                    saveEqualizerSettings();
+                });
+    }
+
     private void toggleDiagnostics() {
         boolean show = diagnosticView.getVisibility() != View.VISIBLE;
         diagnosticView.setVisibility(show ? View.VISIBLE : View.GONE);
