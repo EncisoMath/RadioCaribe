@@ -21,6 +21,7 @@ import android.util.Log;
 final class UltraSleep {
     private static final String TAG = "RadioCaribeSleep";
     static final String SETTING = "radiocaribe_ultra_sleep";
+    static final String KEEP_WIFI = "radiocaribe_sleep_keep_wifi";
     private static final String PREFS = "radiocaribe_ultra_sleep_state";
     private static final String KEY_SLEEPING = "sleeping";
     private static final String KEY_WIFI = "restore_wifi";
@@ -31,6 +32,13 @@ final class UltraSleep {
     static boolean enabled(Context context) {
         try { return Settings.Global.getInt(context.getContentResolver(), SETTING, 0) == 1; }
         catch (Exception error) { Log.w(TAG, "Cannot read ultra-sleep toggle", error); return false; }
+    }
+
+    // Fast resume option: leave Wi-Fi associated while screen and media
+    // sleep. Costs more battery than disabling Wi-Fi fully. Off by default.
+    static boolean keepWifi(Context context) {
+        try { return Settings.Global.getInt(context.getContentResolver(), KEEP_WIFI, 0) == 1; }
+        catch (Exception error) { return false; }
     }
 
     static boolean powered(Context context) {
@@ -68,11 +76,13 @@ final class UltraSleep {
             Log.e(TAG, "State not persisted: refusing to disable radios");
             return;
         }
-        try { if (wifiOn && wifi != null) wifi.setWifiEnabled(false); }
+        boolean wifiKeptOn = keepWifi(context);
+        try { if (wifiOn && !wifiKeptOn && wifi != null) wifi.setWifiEnabled(false); }
         catch (Exception error) { Log.w(TAG, "Cannot switch Wi-Fi off", error); }
         try { if (bluetoothOn && bluetooth != null) bluetooth.disable(); }
         catch (Exception error) { Log.w(TAG, "Cannot switch Bluetooth off", error); }
-        Log.i(TAG, "Ultra-sleep entered: wifi=" + wifiOn + " bluetooth=" + bluetoothOn);
+        Log.i(TAG, "Ultra-sleep entered: wifi=" + wifiOn + " keptOn=" + wifiKeptOn
+                + " bluetooth=" + bluetoothOn);
     }
 
     static void restore(Context context) {
@@ -86,7 +96,11 @@ final class UltraSleep {
         // Keep saved state until Wi-Fi restore has been requested, so a later
         // charging event can retry if the framework was temporarily unavailable.
         boolean restoredWifi = !wifiOn;
-        try { if (wifiOn && wifi != null) restoredWifi = wifi.setWifiEnabled(true); }
+        try {
+            if (wifiOn && wifi != null) {
+                restoredWifi = wifi.isWifiEnabled() || wifi.setWifiEnabled(true);
+            }
+        }
         catch (Exception error) { Log.w(TAG, "Cannot restore Wi-Fi", error); }
 
         try {
