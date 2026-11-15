@@ -22,7 +22,6 @@ import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
 import android.media.AudioDeviceInfo;
 import android.media.AudioDeviceCallback;
-import android.media.audiofx.LoudnessEnhancer;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.BatteryManager;
@@ -47,16 +46,21 @@ import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
+import android.content.res.ColorStateList;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlayer;
+import com.google.android.exoplayer2.DefaultRenderersFactory;
+import com.google.android.exoplayer2.audio.AudioProcessor;
+import com.google.android.exoplayer2.audio.AudioSink;
+import com.google.android.exoplayer2.audio.DefaultAudioSink;
 import com.google.android.exoplayer2.audio.AudioAttributes;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
 import com.google.android.exoplayer2.Player;
-import com.google.android.exoplayer2.analytics.AnalyticsListener;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -80,6 +84,8 @@ public class MainActivity extends Activity {
     private static final String KEY_DARK = "dark_theme";
     private static final String KEY_STATIONS = "station_list_v2";
     private static final String KEY_RECENTS = "recent_urls_v1";
+    private static final String KEY_EQ_GAIN = "equalizer_gain_db_v1";
+    private static final String KEY_EQ_BAND = "equalizer_band_db_v1_";
 
     private static final int NAVY = Color.rgb(10, 31, 58);
     private static final int BLUE = Color.rgb(18, 139, 255);
@@ -114,8 +120,12 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private ExoPlayer player;
     private AudioManager audioManager;
-    private LoudnessEnhancer streamingBooster;
-    private int persistentStreamSession = -1;
+    // The actual PCM DSP is attached to ExoPlayer's AudioSink.
+    // Its gain REPLACES the former fixed +10 dB LoudnessEnhancer so the
+    // output never accidentally applies both stages (+35 dB).
+    private TwelveBandAudioProcessor activeEq;
+    private final int[] eqBandsDb = new int[TwelveBandAudioProcessor.BAND_COUNT];
+    private int eqAmplificationDb = 10;
     // Keep the active Android media output at maximum, regardless of which route
     // is currently connected (jack, wired headset, USB, Bluetooth or speaker).
     // Android stores a DIFFERENT index for each route. Public AudioManager APIs
@@ -124,7 +134,6 @@ public class MainActivity extends Activity {
     private int lastObservedMediaVolume = -1;
     private final Runnable volumeRecheck = () -> {
         maximizeMediaVolume();
-        updateBoosterForOutput();
     };
     private final Runnable volumeWatchdog = new Runnable() {
         @Override public void run() {
@@ -154,9 +163,7 @@ public class MainActivity extends Activity {
             scheduleVolumeRechecks();
         }
     };
-    // 1000 millibels = +10 dB on INTERNET radio streams only.
-    // FM uses its own native audio path and retains its original behaviour.
-    private static final int STREAM_GAIN_MB = 1000;
+    // FM is a separate physical audio patch, bypassing ExoPlayer's PCM EQ.
     private InternalFmController fmController;
     private WebAdminServer webAdmin;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -217,6 +224,7 @@ public class MainActivity extends Activity {
     private TextView clockView;
     private TextView themeView;
     private TextView diagnosticButton;
+    private TextView eqButton;
     private TextView diagnosticView;
     private BatteryView batteryView;
     private WifiView wifiView;
@@ -305,6 +313,10 @@ public class MainActivity extends Activity {
         scheduleVolumeRechecks();
         handler.postDelayed(volumeWatchdog, VOLUME_WATCHDOG_MS);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        eqAmplificationDb = Math.max(0, Math.min(25, prefs.getInt(KEY_EQ_GAIN, 10)));
+        for (int i = 0; i < eqBandsDb.length; i++) {
+            eqBandsDb[i] = Math.max(-12, Math.min(12, prefs.getInt(KEY_EQ_BAND + i, 0)));
+        }
         fmController = new InternalFmController(this, this::appendDiag);
         IntentFilter powerEvents = new IntentFilter();
         powerEvents.addAction(Intent.ACTION_POWER_CONNECTED);
@@ -365,7 +377,6 @@ public class MainActivity extends Activity {
         if (audioManager != null) audioManager.unregisterAudioDeviceCallback(audioDeviceCallback);
         if (webAdmin != null) webAdmin.stop();
         releasePlayer();
-        releaseStreamingBooster();
         if (fmController != null) fmController.stop();
         super.onDestroy();
     }
@@ -391,7 +402,6 @@ public class MainActivity extends Activity {
             batteryReceiverRegistered = false;
         }
         releasePlayer();
-        releaseStreamingBooster();
         if (fmController != null) fmController.stopAsync();
         if (webAdmin != null) webAdmin.setSuspended(true);
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -670,7 +680,14 @@ public class MainActivity extends Activity {
         leftStatus.addView(diagnosticButton, netLp);
         diagnosticButton.setOnClickListener(v -> toggleDiagnostics());
 
-        FrameLayout.LayoutParams leftLp = new FrameLayout.LayoutParams(dp(192), dp(42), Gravity.TOP | Gravity.LEFT);
+        eqButton = makeIconButton("\u2637", 23); // Compact equalizer icon.
+        eqButton.setContentDescription("Ecualizador de 12 bandas");
+        LinearLayout.LayoutParams eqLp = new LinearLayout.LayoutParams(dp(36), dp(32));
+        eqLp.leftMargin = dp(4);
+        leftStatus.addView(eqButton, eqLp);
+        eqButton.setOnClickListener(v -> showEqualizerDialog());
+
+        FrameLayout.LayoutParams leftLp = new FrameLayout.LayoutParams(dp(236), dp(42), Gravity.TOP | Gravity.LEFT);
         leftLp.leftMargin = dp(12);
         leftLp.topMargin = dp(4);
         root.addView(leftStatus, leftLp);
@@ -678,7 +695,7 @@ public class MainActivity extends Activity {
         clockView = makeText("", 22, Typeface.BOLD);
         clockView.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         clockView.setSingleLine(true);
-        FrameLayout.LayoutParams clockLp = new FrameLayout.LayoutParams(dp(410), dp(42), Gravity.TOP | Gravity.RIGHT);
+        FrameLayout.LayoutParams clockLp = new FrameLayout.LayoutParams(dp(300), dp(42), Gravity.TOP | Gravity.RIGHT);
         clockLp.rightMargin = dp(15);
         clockLp.topMargin = dp(3);
         root.addView(clockView, clockLp);
@@ -1263,48 +1280,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void releaseStreamingBooster() {
-        LoudnessEnhancer old = streamingBooster;
-        streamingBooster = null;
-        if (old != null) {
-            try { old.setEnabled(false); } catch (Exception ignored) { }
-            try { old.release(); } catch (Exception ignored) { }
-        }
-    }
-
-    private void updateBoosterForOutput() {
-        if (streamingBooster == null) return;
-        try {
-            if (!streamingBooster.getEnabled()) {
-                streamingBooster.setEnabled(true);
-                android.util.Log.i("RadioCaribeAudio", "Online +10dB boost re-enabled for session="
-                        + persistentStreamSession);
-            }
-        } catch (Exception e) {
-            android.util.Log.w("RadioCaribeAudio", "Could not enable online boost", e);
-        }
-    }
-
-    private void ensureStreamingBooster(int sessionId) {
-        if (sessionId <= 0) return;
-        if (streamingBooster != null && persistentStreamSession == sessionId) {
-            updateBoosterForOutput();
-            return;
-        }
-        releaseStreamingBooster();
-        persistentStreamSession = sessionId;
-        try {
-            LoudnessEnhancer booster = new LoudnessEnhancer(sessionId);
-            booster.setTargetGain(STREAM_GAIN_MB);
-            streamingBooster = booster;
-            updateBoosterForOutput();
-            android.util.Log.i("RadioCaribeAudio", "session-fixed +" + (STREAM_GAIN_MB / 100f)
-                    + "dB session=" + sessionId);
-        } catch (Exception e) {
-            android.util.Log.w("RadioCaribeAudio", "LoudnessEnhancer unsupported: no boost", e);
-        }
-    }
-
     private void playCurrentStation(boolean isRetry) {
         handler.removeCallbacks(retryRunnable);
         releasePlayer();
@@ -1380,7 +1355,24 @@ public class MainActivity extends Activity {
         updatePlayButton(true);
 
         maximizeMediaVolume();
-        ExoPlayer p = new ExoPlayer.Builder(this).build();
+        // MediaCodec decoding -> custom 12-band PCM DSP -> AudioTrack output.
+        // Disable hardware offload/float output: both can bypass PCM effects.
+        final TwelveBandAudioProcessor dsp = new TwelveBandAudioProcessor();
+        dsp.setValues(eqBandsDb, eqAmplificationDb);
+        DefaultRenderersFactory renderers = new DefaultRenderersFactory(this) {
+            @Override
+            protected AudioSink buildAudioSink(Context context, boolean enableFloatOutput,
+                    boolean enableAudioTrackPlaybackParams, boolean enableOffload) {
+                return new DefaultAudioSink.Builder(context)
+                        .setEnableFloatOutput(false)
+                        .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                        .setOffloadMode(DefaultAudioSink.OFFLOAD_MODE_DISABLED)
+                        .setAudioProcessors(new AudioProcessor[]{dsp})
+                        .build();
+            }
+        };
+        ExoPlayer p = new ExoPlayer.Builder(this, renderers).build();
+        activeEq = dsp;
         player = p;
         // Use ExoPlayer's own Android 9 audio-focus manager: no leaked focus
         // listeners after retries and route changes. Playback works without a jack.
@@ -1388,21 +1380,6 @@ public class MainActivity extends Activity {
                 .setUsage(C.USAGE_MEDIA)
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .build(), true);
-        // Reuse the SAME AudioTrack session across station changes, instead of
-        // releasing/recreating the DSP and causing a loudness drop every time.
-        if (persistentStreamSession <= 0 && audioManager != null) {
-            persistentStreamSession = audioManager.generateAudioSessionId();
-        }
-        if (persistentStreamSession > 0) {
-            p.setAudioSessionId(persistentStreamSession);
-            ensureStreamingBooster(persistentStreamSession);
-        }
-        p.addAnalyticsListener(new AnalyticsListener() {
-            @Override public void onAudioSessionIdChanged(AnalyticsListener.EventTime eventTime, int audioSessionId) {
-                if (player == p && audioSessionId > 0) ensureStreamingBooster(audioSessionId);
-            }
-        });
-
         p.addListener(new Player.Listener() {
             @Override public void onPlaybackStateChanged(int state) {
                 if (p != player) return;
@@ -1455,6 +1432,7 @@ public class MainActivity extends Activity {
         // gets the exact same session and gain immediately.
         ExoPlayer old = player;
         player = null;
+        activeEq = null;
         preparing = false;
         if (old != null) {
             try { old.stop(); } catch (Exception ignored) { }
@@ -1553,6 +1531,7 @@ public class MainActivity extends Activity {
         frequencyView.setTextColor(secondary);
         themeView.setTextColor(text);
         diagnosticButton.setTextColor(text);
+        if (eqButton != null) eqButton.setTextColor(text);
         themeView.setText(darkMode ? "☀" : "☾");
 
         batteryView.setDark(darkMode);
