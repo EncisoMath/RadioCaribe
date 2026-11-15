@@ -21,6 +21,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
 import android.media.AudioDeviceInfo;
+import android.media.AudioDeviceCallback;
 import android.media.audiofx.LoudnessEnhancer;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
@@ -49,7 +50,9 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlayer;
+import com.google.android.exoplayer2.audio.AudioAttributes;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
 import com.google.android.exoplayer2.Player;
@@ -113,21 +116,45 @@ public class MainActivity extends Activity {
     private AudioManager audioManager;
     private LoudnessEnhancer streamingBooster;
     private int persistentStreamSession = -1;
-    private final Runnable jackVolumeRetry = () -> {
+    // Keep the active Android media output at maximum, regardless of which route
+    // is currently connected (jack, wired headset, USB, Bluetooth or speaker).
+    // Android stores a DIFFERENT index for each route. Public AudioManager APIs
+    // can only change the active route; retry on route changes and while running.
+    private static final long VOLUME_WATCHDOG_MS = 4000L;
+    private int lastObservedMediaVolume = -1;
+    private final Runnable volumeRecheck = () -> {
         maximizeMediaVolume();
-        updateBoosterForJack();
+        updateBoosterForOutput();
     };
-    private final BroadcastReceiver jackReceiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context context, Intent intent) {
-            handler.removeCallbacks(jackVolumeRetry);
-            jackVolumeRetry.run();
-            handler.postDelayed(jackVolumeRetry, 300L);
-            handler.postDelayed(jackVolumeRetry, 1000L);
+    private final Runnable volumeWatchdog = new Runnable() {
+        @Override public void run() {
+            volumeRecheck.run();
+            handler.postDelayed(this, VOLUME_WATCHDOG_MS);
         }
     };
-    // 600 millibels = +6 dB target gain on the online audio session only.
-    // Android's LoudnessEnhancer limits/compresses peaks. FM remains untouched.
-    private static final int STREAM_GAIN_MB = 600;
+    private void scheduleVolumeRechecks() {
+        handler.removeCallbacks(volumeRecheck);
+        volumeRecheck.run();
+        handler.postDelayed(volumeRecheck, 250L);
+        handler.postDelayed(volumeRecheck, 1000L);
+        handler.postDelayed(volumeRecheck, 2500L);
+    }
+    private final BroadcastReceiver jackReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            scheduleVolumeRechecks();
+        }
+    };
+    private final AudioDeviceCallback audioDeviceCallback = new AudioDeviceCallback() {
+        @Override public void onAudioDevicesAdded(AudioDeviceInfo[] addedDevices) {
+            scheduleVolumeRechecks();
+        }
+        @Override public void onAudioDevicesRemoved(AudioDeviceInfo[] removedDevices) {
+            scheduleVolumeRechecks();
+        }
+    };
+    // 1000 millibels = +10 dB on INTERNET radio streams only.
+    // FM uses its own native audio path and retains its original behaviour.
+    private static final int STREAM_GAIN_MB = 1000;
     private InternalFmController fmController;
     private WebAdminServer webAdmin;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -227,9 +254,9 @@ public class MainActivity extends Activity {
 
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         registerReceiver(jackReceiver, new IntentFilter(Intent.ACTION_HEADSET_PLUG));
-        maximizeMediaVolume();
-        handler.postDelayed(jackVolumeRetry, 400L);
-        handler.postDelayed(jackVolumeRetry, 1400L);
+        if (audioManager != null) audioManager.registerAudioDeviceCallback(audioDeviceCallback, handler);
+        scheduleVolumeRechecks();
+        handler.postDelayed(volumeWatchdog, VOLUME_WATCHDOG_MS);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         fmController = new InternalFmController(this, this::appendDiag);
 
@@ -258,8 +285,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        maximizeMediaVolume();
-        updateBoosterForJack();
+        scheduleVolumeRechecks();
         enterImmersiveMode();
         if (wifiView != null) wifiView.invalidate();
     }
@@ -268,6 +294,7 @@ public class MainActivity extends Activity {
         handler.removeCallbacksAndMessages(null);
         try { unregisterReceiver(batteryReceiver); } catch (Exception ignored) { }
         try { unregisterReceiver(jackReceiver); } catch (Exception ignored) { }
+        if (audioManager != null) audioManager.unregisterAudioDeviceCallback(audioDeviceCallback);
         if (webAdmin != null) webAdmin.stop();
         releasePlayer();
         releaseStreamingBooster();
@@ -1064,17 +1091,40 @@ public class MainActivity extends Activity {
     }
 
     private void maximizeMediaVolume() {
-        if (audioManager == null || !isJackPresent()) return;
+        if (audioManager == null) return;
         try {
             int maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-            if (maximum > 0 && audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) < maximum) {
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maximum, 0);
+            int current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+            if (maximum <= 0) return;
+            if (current != lastObservedMediaVolume) {
+                android.util.Log.i("RadioCaribeAudio", "Active media volume=" + current
+                        + "/" + maximum + " connectedOutputs=" + connectedOutputs());
+                lastObservedMediaVolume = current;
             }
-            android.util.Log.i("RadioCaribeAudio", "jack=YES media="
-                    + audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                    + "/" + maximum);
+            if (current < maximum) {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maximum, 0);
+                int actual = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                android.util.Log.i("RadioCaribeAudio", "Restored active media volume "
+                        + current + " -> " + actual + "/" + maximum
+                        + " outputs=" + connectedOutputs());
+                lastObservedMediaVolume = actual;
+            }
         } catch (Exception e) {
-            android.util.Log.w("RadioCaribeAudio", "Jack media volume max failed", e);
+            android.util.Log.w("RadioCaribeAudio", "Media volume restore failed", e);
+        }
+    }
+
+    private String connectedOutputs() {
+        if (audioManager == null) return "none";
+        try {
+            StringBuilder result = new StringBuilder();
+            for (AudioDeviceInfo d : audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                if (result.length() != 0) result.append(",");
+                result.append(d.getType());
+            }
+            return result.toString();
+        } catch (Exception e) {
+            return "unknown";
         }
     }
 
@@ -1087,22 +1137,23 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void updateBoosterForJack() {
+    private void updateBoosterForOutput() {
         if (streamingBooster == null) return;
         try {
-            boolean jack = isJackPresent();
-            streamingBooster.setEnabled(jack);
-            android.util.Log.i("RadioCaribeAudio", "booster enabled=" + jack
-                    + " session=" + persistentStreamSession);
+            if (!streamingBooster.getEnabled()) {
+                streamingBooster.setEnabled(true);
+                android.util.Log.i("RadioCaribeAudio", "Online +10dB boost re-enabled for session="
+                        + persistentStreamSession);
+            }
         } catch (Exception e) {
-            android.util.Log.w("RadioCaribeAudio", "Could not update jack booster", e);
+            android.util.Log.w("RadioCaribeAudio", "Could not enable online boost", e);
         }
     }
 
     private void ensureStreamingBooster(int sessionId) {
         if (sessionId <= 0) return;
         if (streamingBooster != null && persistentStreamSession == sessionId) {
-            updateBoosterForJack();
+            updateBoosterForOutput();
             return;
         }
         releaseStreamingBooster();
@@ -1111,7 +1162,7 @@ public class MainActivity extends Activity {
             LoudnessEnhancer booster = new LoudnessEnhancer(sessionId);
             booster.setTargetGain(STREAM_GAIN_MB);
             streamingBooster = booster;
-            updateBoosterForJack();
+            updateBoosterForOutput();
             android.util.Log.i("RadioCaribeAudio", "session-fixed +" + (STREAM_GAIN_MB / 100f)
                     + "dB session=" + sessionId);
         } catch (Exception e) {
@@ -1191,6 +1242,12 @@ public class MainActivity extends Activity {
         maximizeMediaVolume();
         ExoPlayer p = new ExoPlayer.Builder(this).build();
         player = p;
+        // Use ExoPlayer's own Android 9 audio-focus manager: no leaked focus
+        // listeners after retries and route changes. Playback works without a jack.
+        p.setAudioAttributes(new AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                .build(), true);
         // Reuse the SAME AudioTrack session across station changes, instead of
         // releasing/recreating the DSP and causing a loudness drop every time.
         if (persistentStreamSession <= 0 && audioManager != null) {
@@ -1240,7 +1297,6 @@ public class MainActivity extends Activity {
         });
 
         try {
-            requestAudioFocus();
             p.setMediaItem(MediaItem.fromUri(station.url));
             p.setPlayWhenReady(shouldPlay);
             p.prepare();
@@ -1263,26 +1319,6 @@ public class MainActivity extends Activity {
         if (old != null) {
             try { old.stop(); } catch (Exception ignored) { }
             try { old.release(); } catch (Exception ignored) { }
-        }
-    }
-
-    private void requestAudioFocus() {
-        if (audioManager != null) {
-            audioManager.requestAudioFocus(focusChange -> {
-                if (focusChange < 0 && player != null) {
-                    try {
-                        if (player.isPlaying()) {
-                            player.pause();
-                            updatePlayButton(false);
-                        }
-                    } catch (Exception ignored) { }
-                } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN && shouldPlay && player != null) {
-                    try {
-                        player.play();
-                        updatePlayButton(true);
-                    } catch (Exception ignored) { }
-                }
-            }, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
         }
     }
 
