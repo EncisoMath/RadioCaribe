@@ -1,4 +1,4 @@
-name: Restore archived RadioCaribe v0.32 APK
+name: Restore archived RadioCaribe v0.32 and v0.33 APKs
 on:
   push:
     paths: [".github/workflows/restore-v032-release.yml"]
@@ -12,7 +12,7 @@ jobs:
   repair:
     runs-on: ubuntu-latest
     steps:
-      - name: Restore original v0.32 signed APK from immutable successful build
+      - name: Restore original v0.32 and v0.33 signed APKs from successful builds
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -24,4 +24,12 @@ jobs:
           test -s "$RUNNER_TEMP/v032/RadioCaribe_v0.32.apk"
           gh release upload v0.32 "$RUNNER_TEMP/v032/RadioCaribe_v0.32.apk" \
             --repo "$GITHUB_REPOSITORY" --clobber
-          echo "Original RadioCaribe v0.32 release restored"
+          mkdir -p "$RUNNER_TEMP/v033"
+          gh run download 43725794842 \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "RadioCaribe-v0.33-APK" \
+            --dir "$RUNNER_TEMP/v033"
+          test -s "$RUNNER_TEMP/v033/RadioCaribe_v0.33.apk"
+          gh release upload v0.33 "$RUNNER_TEMP/v033/RadioCaribe_v0.33.apk" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Original v0.32 and v0.33 APK releases restored"
